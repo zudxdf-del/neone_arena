@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>NEON ARENA 2.0 — Online 2D</title>
+<style>
+*{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#080b16;color:#fff;font-family:system-ui,Arial,sans-serif}
+#game{display:block;width:100vw;height:100vh;background:radial-gradient(circle at 50% 40%,#151d38,#080b16 70%)}
+#ui{position:fixed;inset:0;pointer-events:none}.top{display:flex;justify-content:space-between;gap:8px;padding:12px}
+.panel{background:rgba(10,14,30,.9);border:1px solid #34406c;border-radius:15px;padding:10px 12px;backdrop-filter:blur(8px)}
+#status{font-size:14px;color:#c2ccff}#score{font-weight:800}
+#lobby{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);width:min(92vw,440px);pointer-events:auto;text-align:center}
+h1{margin:0 0 8px;font-size:38px;letter-spacing:1px}p{color:#aeb8d9;line-height:1.45}
+button,input{font:inherit}button{border:0;border-radius:13px;padding:13px 16px;background:#6d5dfc;color:#fff;font-weight:800;cursor:pointer;margin:5px}
+button.secondary{background:#202943}button:disabled{opacity:.5}
+input{width:100%;padding:13px;border-radius:13px;border:1px solid #3a466d;background:#0e1426;color:#fff;outline:none}
+.row{display:flex;gap:8px}.row>*{flex:1}#roomCode{font-size:25px;font-weight:900;letter-spacing:4px;margin:12px 0;color:#8efcff}
+#roomInfo,#joinInfo{font-size:13px;color:#9ca9d0;min-height:22px}
+#controls{position:fixed;bottom:15px;left:15px;right:15px;display:flex;justify-content:space-between;align-items:end;pointer-events:none}
+#stick{width:145px;height:145px;border-radius:50%;background:rgba(42,54,91,.42);border:1px solid #47537b;pointer-events:auto;touch-action:none;position:relative}
+#knob{width:62px;height:62px;border-radius:50%;background:#6d5dfc;position:absolute;left:41px;top:41px;box-shadow:0 0 25px #6d5dfc88}
+#fire{width:92px;height:92px;border-radius:50%;background:#ff477e;border:1px solid #ff88a8;pointer-events:auto;touch-action:none;box-shadow:0 0 30px #ff477e66}
+#fire:active{transform:scale(.95)}.hidden{display:none!important}
+#hint{position:fixed;bottom:8px;left:50%;transform:translateX(-50%);font-size:11px;color:#657091;text-align:center;white-space:nowrap}
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<div id="ui">
+  <div class="top"><div class="panel" id="status">Главное меню</div><div class="panel" id="score">Ты: 0 | Соперник: 0</div></div>
+  <div id="lobby" class="panel">
+    <h1>NEON ARENA 2.0</h1>
+    <p>Новая сетевая версия: хост управляет состоянием матча, а телефоны передают только управление. Это заметно стабильнее для игры через мобильный интернет.</p>
+    <button id="create">Создать комнату</button>
+    <div id="hostBox" class="hidden">
+      <div id="roomCode"></div>
+      <button id="copy" class="secondary">Скопировать код</button>
+      <div id="roomInfo">Ожидание второго игрока…</div>
+    </div>
+    <hr style="border:0;border-top:1px solid #293352;margin:16px 0">
+    <div class="row"><input id="roomInput" placeholder="Код комнаты" autocomplete="off"><button class="secondary" id="join">Войти</button></div>
+    <div id="joinInfo"></div>
+  </div>
+  <div id="controls" class="hidden">
+    <div id="stick"><div id="knob"></div></div><button id="fire">ОГОНЬ</button>
+  </div>
+  <div id="hint">На ПК: WASD / стрелки + пробел</div>
+</div>
+
+<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<script>
+const canvas=document.getElementById('game'),ctx=canvas.getContext('2d');
+const lobby=document.getElementById('lobby'),controls=document.getElementById('controls');
+const statusEl=document.getElementById('status'),scoreEl=document.getElementById('score');
+const hostBox=document.getElementById('hostBox'),roomCodeEl=document.getElementById('roomCode');
+const roomInfo=document.getElementById('roomInfo'),joinInfo=document.getElementById('joinInfo');
+let W=innerWidth,H=innerHeight,dpr=Math.min(devicePixelRatio||1,2);
+function resize(){W=innerWidth;H=innerHeight;canvas.width=W*dpr;canvas.height=H*dpr;canvas.style.width=W+'px';canvas.style.height=H+'px';ctx.setTransform(dpr,0,0,dpr,0,0)}
+addEventListener('resize',resize);resize();
+const S={peer:null,conn:null,host:false,started:false,room:'',me:{x:0,y:0,hp:100,score:0},enemy:{x:0,y:0,hp:100,score:0},bullets:[],enemyBullets:[],keys:{},joy:{x:0,y:0},remoteInput:{x:0,y:0},lastNet:0,lastInput:0,lastShot:0};
+const SPEED=260,BULLET_SPEED=480,HIT_R=23,FIRE_COOLDOWN=220;
+function setStatus(t){statusEl.textContent=t}function makeCode(){return Math.random().toString(36).slice(2,8).toUpperCase()}
+function resetPlayers(){S.me.x=S.host?W*.25:W*.75;S.me.y=H*.5;S.enemy.x=S.host?W*.75:W*.25;S.enemy.y=H*.5;S.me.hp=100;S.enemy.hp=100;S.bullets=[];S.enemyBullets=[]}
+function startGame(){if(S.started)return;S.started=true;lobby.classList.add('hidden');controls.classList.remove('hidden');setStatus('Игра идёт');resetPlayers();if(S.host)sendSnapshot()}
+function stopGame(msg){S.started=false;controls.classList.add('hidden');lobby.classList.remove('hidden');setStatus(msg);roomInfo.textContent='Можно снова подключить игрока.'}
+function peerOptions(){return{debug:0,host:'0.peerjs.com',port:443,path:'/',secure:true,config:{iceServers:[{urls:'stun:stun.l.google.com:19302'},{urls:'stun:stun1.l.google.com:19302'}]}}}
+function newPeerWithId(id){return new Peer(id,peerOptions())}function newPeerRandom(){return new Peer(null,peerOptions())}
+function wirePeerErrors(p,isHost){p.on('disconnected',()=>{if(!p.destroyed){try{p.reconnect()}catch(e){}}});p.on('error',e=>{const type=e&&e.type||'unknown';if(isHost){if(type==='unavailable-id')roomInfo.textContent='Этот код уже занят. Нажми «Создать комнату» ещё раз.';else roomInfo.textContent='Ошибка сети: '+type;setStatus('Ошибка соединения')}else{joinInfo.textContent=type==='peer-unavailable'?'Комната не найдена. Проверь код.':'Ошибка сети: '+type;setStatus('Не удалось подключиться')}})}
+document.getElementById('create').onclick=()=>{if(S.peer)return;S.host=true;S.room=makeCode();S.peer=newPeerWithId(S.room);setStatus('Создание комнаты…');wirePeerErrors(S.peer,true);S.peer.on('open',id=>{S.room=id.toUpperCase();roomCodeEl.textContent=S.room;hostBox.classList.remove('hidden');roomInfo.textContent='Ожидание второго игрока…';setStatus('Комната создана')});S.peer.on('connection',c=>{if(S.conn){c.close();return}setupConnection(c,true)})};
+document.getElementById('join').onclick=()=>{const c=document.getElementById('roomInput').value.trim().toUpperCase();if(!/^[A-Z0-9_-]{4,30}$/.test(c)){joinInfo.textContent='Введи корректный код комнаты.';return}if(S.peer){joinInfo.textContent='Уже выполняется подключение.';return}S.host=false;S.room=c;joinInfo.textContent='Подключение…';setStatus('Подключение к комнате…');S.peer=newPeerRandom();wirePeerErrors(S.peer,false);S.peer.on('open',()=>{const c2=S.peer.connect(S.room,{reliable:true,serialization:'json',metadata:{game:'neon-arena-2'}});setupConnection(c2,false)})};
+function setupConnection(c,isHost){S.conn=c;c.on('open',()=>{roomInfo.textContent='Игрок подключён!';joinInfo.textContent='Подключено!';setStatus('Соперник найден');startGame();if(isHost)sendSnapshot();else c.send({type:'ready'})});c.on('data',d=>{if(!d||typeof d!=='object')return;if(isHost){if(d.type==='input'){S.remoteInput.x=clamp(d.x,-1,1);S.remoteInput.y=clamp(d.y,-1,1)}if(d.type==='shoot')hostShoot(false)}else{if(d.type==='snapshot')applySnapshot(d);if(d.type==='start'&&!S.started)startGame();if(d.type==='round'){S.enemy.score=d.enemyScore;S.me.score=d.myScore;resetPlayers();setStatus(d.text)}}});c.on('close',()=>{S.conn=null;stopGame('Соперник отключился');if(S.host){hostBox.classList.remove('hidden');roomInfo.textContent='Соперник отключился. Ждём нового игрока…'}});c.on('error',()=>{})}
+function clamp(v,a,b){return Math.max(a,Math.min(b,v))}function inputVector(){let x=(S.keys.d||S.keys.arrowright?1:0)-(S.keys.a||S.keys.arrowleft?1:0)+S.joy.x;let y=(S.keys.s||S.keys.arrowdown?1:0)-(S.keys.w||S.keys.arrowup?1:0)+S.joy.y;const l=Math.hypot(x,y);if(l>1){x/=l;y/=l}return{x,y}}
+function sendInput(t){if(S.host||!S.conn?.open)return;if(t-S.lastInput<45)return;S.lastInput=t;const v=inputVector();S.conn.send({type:'input',x:v.x,y:v.y})}
+function hostShoot(fromRemote){if(!S.started)return;const now=performance.now();if(fromRemote&&now-S.lastShot<FIRE_COOLDOWN)return;if(!fromRemote&&now-S.lastShot<FIRE_COOLDOWN)return;S.lastShot=now;const shooter=fromRemote?S.enemy:S.me,target=fromRemote?S.me:S.enemy;let dx=target.x-shooter.x,dy=target.y-shooter.y,L=Math.hypot(dx,dy)||1;S.bullets.push({owner:fromRemote?1:0,x:shooter.x,y:shooter.y,vx:dx/L*BULLET_SPEED,vy:dy/L*BULLET_SPEED,life:1.5})}
+function shoot(){if(!S.started)return;if(S.host)hostShoot(false);else if(S.conn?.open)S.conn.send({type:'shoot'})}
+function applySnapshot(d){S.enemy.x=d.host.x;S.enemy.y=d.host.y;S.enemy.hp=d.host.hp;S.enemy.score=d.host.score;S.me.x=d.client.x;S.me.y=d.client.y;S.me.hp=d.client.hp;S.me.score=d.client.score;S.enemyBullets=d.bullets.filter(b=>b.owner===0);S.bullets=d.bullets.filter(b=>b.owner===1)}
+function sendSnapshot(){if(!S.conn?.open)return;S.conn.send({type:'snapshot',host:{x:S.me.x,y:S.me.y,hp:S.me.hp,score:S.me.score},client:{x:S.enemy.x,y:S.enemy.y,hp:S.enemy.hp,score:S.enemy.score},bullets:S.bullets.map(b=>({owner:b.owner,x:b.x,y:b.y}))})}
+function round(winner){if(winner===0)S.me.score++;else S.enemy.score++;const text=winner===0?'Ты выиграл раунд!':'Соперник выиграл раунд!';resetPlayers();setStatus(text);if(S.conn?.open)S.conn.send({type:'round',myScore:S.enemy.score,enemyScore:S.me.score,text})}
+function updateHost(dt){const v=inputVector();S.me.x=clamp(S.me.x+v.x*SPEED*dt,25,W-25);S.me.y=clamp(S.me.y+v.y*SPEED*dt,70,H-25);S.enemy.x=clamp(S.enemy.x+S.remoteInput.x*SPEED*dt,25,W-25);S.enemy.y=clamp(S.enemy.y+S.remoteInput.y*SPEED*dt,70,H-25);for(const b of S.bullets){b.x+=b.vx*dt;b.y+=b.vy*dt;b.life-=dt}for(let i=S.bullets.length-1;i>=0;i--){const b=S.bullets[i],target=b.owner===0?S.me:S.enemy;if(Math.hypot(b.x-target.x,b.y-target.y)<HIT_R){S.bullets.splice(i,1);target.hp-=20;if(target.hp<=0)round(b.owner===0?1:0)}}S.bullets=S.bullets.filter(b=>b.life>0&&b.x>-30&&b.x<W+30&&b.y>40&&b.y<H+30)}
+function update(dt,t){if(S.host){updateHost(dt);if(t-S.lastNet>50){S.lastNet=t;sendSnapshot()}}else sendInput(t)}
+addEventListener('keydown',e=>{S.keys[e.key.toLowerCase()]=true;if(e.code==='Space'){e.preventDefault();shoot()}});addEventListener('keyup',e=>S.keys[e.key.toLowerCase()]=false);
+const stick=document.getElementById('stick'),knob=document.getElementById('knob');let jp=null;function jm(e){const r=stick.getBoundingClientRect(),dx=e.clientX-(r.left+r.width/2),dy=e.clientY-(r.top+r.height/2),m=52,L=Math.hypot(dx,dy)||1;const x=Math.min(m,L?dx/L*m:0),y=Math.min(m,L?dy/L*m:0);S.joy.x=x/m;S.joy.y=y/m;knob.style.left=41+x+'px';knob.style.top=41+y+'px'}
+stick.onpointerdown=e=>{jp=e.pointerId;stick.setPointerCapture(jp);jm(e)};stick.onpointermove=e=>{if(e.pointerId===jp)jm(e)};stick.onpointerup=stick.onpointercancel=e=>{if(e.pointerId===jp){jp=null;S.joy.x=S.joy.y=0;knob.style.left='41px';knob.style.top='41px'}};document.getElementById('fire').onpointerdown=e=>{e.preventDefault();shoot()};document.getElementById('copy').onclick=async()=>{try{await navigator.clipboard.writeText(S.room);roomInfo.textContent='Код скопирован!'}catch{roomInfo.textContent='Код: '+S.room}};
+function circle(x,y,r,c){ctx.beginPath();ctx.arc(x,y,r,0,Math.PI*2);ctx.fillStyle=c;ctx.fill()}function drawPlayer(p,c,label){ctx.save();ctx.shadowBlur=20;ctx.shadowColor=c;circle(p.x,p.y,20,c);ctx.shadowBlur=0;circle(p.x,p.y,12,'#10162a');ctx.fillStyle='#fff';ctx.font='bold 10px system-ui';ctx.textAlign='center';ctx.fillText(label,p.x,p.y+4);ctx.fillStyle='rgba(0,0,0,.5)';ctx.fillRect(p.x-25,p.y-33,50,5);ctx.fillStyle=c;ctx.fillRect(p.x-25,p.y-33,50*Math.max(0,p.hp)/100,5);ctx.restore()}
+function draw(){ctx.clearRect(0,0,W,H);ctx.strokeStyle='rgba(100,120,190,.10)';for(let x=0;x<W;x+=45){ctx.beginPath();ctx.moveTo(x,55);ctx.lineTo(x,H);ctx.stroke()}for(let y=55;y<H;y+=45){ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(W,y);ctx.stroke()}ctx.strokeStyle='rgba(130,145,255,.3)';ctx.strokeRect(10,65,W-20,H-75);for(const b of S.bullets)circle(b.x,b.y,5,b.owner===0?'#ff5b8a':'#8efcff');if(S.started){drawPlayer(S.me,'#55e7ff','Ты');drawPlayer(S.enemy,'#ff5b8a','Соперник')}scoreEl.textContent=`Ты: ${S.me.score} | Соперник: ${S.enemy.score}`}
+let last=performance.now();function loop(t){const dt=Math.min(.05,(t-last)/1000);last=t;update(dt,t);draw();requestAnimationFrame(loop)}requestAnimationFrame(loop);
+</script>
+</body>
+</html>
