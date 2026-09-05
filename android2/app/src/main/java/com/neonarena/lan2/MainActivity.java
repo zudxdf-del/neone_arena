@@ -11,6 +11,7 @@ import android.widget.Toast;
 import java.net.NetworkInterface;
 import java.net.Inet4Address;
 import java.net.InetAddress;
+import java.net.ServerSocket;
 import java.util.Enumeration;
 
 public class MainActivity extends Activity {
@@ -18,7 +19,7 @@ public class MainActivity extends Activity {
     private LanWsServer ws;
     private WebView web;
     private boolean started=false;
-    private final int HTTP_PORT=8080, WS_PORT=8081;
+    private int httpPort=8080, wsPort=8081;
 
     @Override public void onCreate(Bundle b){
         requestWindowFeature(Window.FEATURE_NO_TITLE);
@@ -29,11 +30,31 @@ public class MainActivity extends Activity {
         web.addJavascriptInterface(new Bridge(),"Android");
         setContentView(web); web.loadUrl("file:///android_asset/index.html");
     }
+    private int freePort(int preferred){
+        for(int p=preferred;p<preferred+20;p++){
+            try(ServerSocket ss=new ServerSocket(p)){ss.setReuseAddress(true);return p;}catch(Exception ignored){}
+        }
+        try(ServerSocket ss=new ServerSocket(0)){return ss.getLocalPort();}catch(Exception e){throw new RuntimeException("Нет свободного порта",e);}
+    }
+    private void stopServers(){
+        try{if(http!=null)http.stop();}catch(Exception ignored){}
+        try{if(ws!=null)ws.stopServer();}catch(Exception ignored){}
+        http=null; ws=null; started=false;
+    }
     private void startServers(){
         if(started)return;
-        try{ http=new LanHttpServer(this,HTTP_PORT); http.start(); ws=new LanWsServer(WS_PORT); ws.start(); started=true;
+        try{
+            httpPort=freePort(8080);
+            wsPort=freePort(httpPort==8080?8081:8081);
+            if(wsPort==httpPort) wsPort=freePort(8082);
+            http=new LanHttpServer(this,httpPort,wsPort); http.start();
+            ws=new LanWsServer(wsPort); ws.start();
+            started=true;
             web.evaluateJavascript("window.serverReady && window.serverReady("+jsQuote(getLanUrl())+")",null);
-        }catch(Exception e){ Toast.makeText(this,"Не удалось запустить сервер: "+e.getMessage(),Toast.LENGTH_LONG).show(); }
+        }catch(Exception e){
+            stopServers();
+            Toast.makeText(this,"Не удалось запустить сервер: "+e.getMessage(),Toast.LENGTH_LONG).show();
+        }
     }
     private String getLanIp(){
         try{ Enumeration<NetworkInterface> ns=NetworkInterface.getNetworkInterfaces(); String fallback=null;
@@ -44,8 +65,8 @@ public class MainActivity extends Activity {
             } return fallback==null?"127.0.0.1":fallback;
         }catch(Exception e){return "127.0.0.1";}
     }
-    private String getLanUrl(){return "http://"+getLanIp()+":"+HTTP_PORT;}
-    private String getWsUrl(){return "ws://"+getLanIp()+":"+WS_PORT;}
+    private String getLanUrl(){return "http://"+getLanIp()+":"+httpPort;}
+    private String getWsUrl(){return "ws://"+getLanIp()+":"+wsPort;}
     private String jsQuote(String x){return "\""+x.replace("\\","\\\\").replace("\"","\\\"")+"\"";}
     public class Bridge{
         @JavascriptInterface public void startServer(){runOnUiThread(()->startServers());}
@@ -53,5 +74,5 @@ public class MainActivity extends Activity {
         @JavascriptInterface public String getWsUrl(){return MainActivity.this.getWsUrl();}
         @JavascriptInterface public boolean isServerStarted(){return started;}
     }
-    @Override protected void onDestroy(){if(http!=null)http.stop();if(ws!=null)ws.stopServer();super.onDestroy();}
+    @Override protected void onDestroy(){stopServers();super.onDestroy();}
 }
