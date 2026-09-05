@@ -1,0 +1,10 @@
+plugins { id 'com.android.application' }
+
+android { namespace 'com.neonarena.lan2'; compileSdk 35
+    defaultConfig { applicationId 'com.neonarena.lan2'; minSdk 23; targetSdk 35; versionCode 2; versionName '2.0' }
+}
+
+dependencies {
+    implementation 'org.java-websocket:Java-WebSocket:1.5.7'
+    implementation 'org.nanohttpd:nanohttpd:2.3.1'
+}
