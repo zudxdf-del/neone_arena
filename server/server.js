@@ -1,4 +1,6 @@
 const http = require('http');
+const fs = require('fs');
+const path = require('path');
 const { WebSocketServer } = require('ws');
 
 const PORT = Number(process.env.PORT || 8080);
@@ -56,8 +58,17 @@ function tick(r,dt){
 }
 
 const server=http.createServer((req,res)=>{
-  if(req.url==='/health'){res.writeHead(200,{'content-type':'application/json'});return res.end(JSON.stringify({ok:true,rooms:rooms.size}));}
-  res.writeHead(200,{'content-type':'text/plain; charset=utf-8'});res.end('NEON ARENA server OK');
+  const u=(req.url||'/').split('?')[0];
+  if(u==='/health'){res.writeHead(200,{'content-type':'application/json'});return res.end(JSON.stringify({ok:true,rooms:rooms.size}));}
+  if(u==='/' || u==='/index.html'){
+    const file=path.join(__dirname,'index.html');
+    fs.readFile(file,(err,data)=>{
+      if(err){res.writeHead(500,{'content-type':'text/plain; charset=utf-8'});return res.end('index.html not found');}
+      res.writeHead(200,{'content-type':'text/html; charset=utf-8','cache-control':'no-store'});res.end(data);
+    });
+    return;
+  }
+  res.writeHead(404,{'content-type':'text/plain; charset=utf-8'});res.end('Not found');
 });
 const wss=new WebSocketServer({server});
 
