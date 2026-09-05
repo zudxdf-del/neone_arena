@@ -1,0 +1,12 @@
+{
+  "name": "neon-arena",
+  "version": "1.0.0",
+  "private": true,
+  "description": "NEON ARENA multiplayer server",
+  "scripts": {
+    "start": "node server/server.js"
+  },
+  "dependencies": {
+    "ws": "^8.18.3"
+  }
+}
