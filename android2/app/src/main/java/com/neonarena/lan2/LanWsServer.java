@@ -13,12 +13,13 @@ import java.util.List;
 public class LanWsServer extends WebSocketServer {
     static class P { WebSocket ws; double x,y,hp=100,ix,iy; int score; long lastShot; }
     static class B { int owner; double x,y,vx,vy,life=1.6; B(int o,double a,double b,double c,double d){owner=o;x=a;y=b;vx=c;vy=d;} }
-    final P[] p={new P(),new P()}; final List<B> shots=new ArrayList<>(); volatile boolean running;
+    final P[] p={new P(),new P()}; final List<B> shots=new ArrayList<>(); volatile boolean running; volatile boolean loop=true;
     public LanWsServer(int port){super(new InetSocketAddress("0.0.0.0",port));}
     @Override public void onOpen(WebSocket c, ClientHandshake h){}
     @Override public void onClose(WebSocket c,int code,String reason,boolean remote){for(int i=0;i<2;i++)if(p[i].ws==c){p[i]=new P();running=false;shots.clear();if(p[1-i].ws!=null)p[1-i].ws.send("{\"type\":\"opponent_left\"}");}}
     @Override public void onError(WebSocket c,Exception e){}
-    @Override public void onStart(){new Thread(()->{while(!isClosed()){try{Thread.sleep(50);tick();}catch(Exception ignored){}}}).start();}
+    @Override public void onStart(){new Thread(()->{while(loop){try{Thread.sleep(50);tick();}catch(InterruptedException e){Thread.currentThread().interrupt();break;}catch(Exception ignored){}}},"neon-arena-tick").start();}
+    public void stopServer(){loop=false;try{stop();}catch(Exception ignored){}}
     void send(WebSocket c,String s){if(c!=null&&c.isOpen())c.send(s);}
     @Override public void onMessage(WebSocket c,String text){try{
         JSONObject m=new JSONObject(text); String t=m.optString("type");
