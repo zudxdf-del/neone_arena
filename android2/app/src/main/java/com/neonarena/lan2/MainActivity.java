@@ -10,16 +10,23 @@ import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.Toast;
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
+import java.io.OutputStream;
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
 import java.net.Inet4Address;
 import java.net.InetAddress;
 import java.net.NetworkInterface;
 import java.net.ServerSocket;
+import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.util.Enumeration;
 import java.util.HashSet;
 import java.util.Set;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
@@ -58,7 +65,7 @@ public class MainActivity extends Activity {
             httpPort=freePort(8080);
             wsPort=freePort(8081);
             if(wsPort==httpPort) wsPort=freePort(8082);
-            http=new LanHttpServer(this,httpPort,wsPort); http.start();
+            http=new LanHttpServer(this,httpPort,wsPort,playerName); http.start();
             ws=new LanWsServer(wsPort); ws.start();
             discovery=new DiscoveryServer(wsPort,playerName);
             new Thread(discovery,"neon-arena-discovery").start();
@@ -99,49 +106,69 @@ public class MainActivity extends Activity {
             try{
                 WifiManager wm=(WifiManager)getApplicationContext().getSystemService(Context.WIFI_SERVICE);
                 if(wm!=null){lock=wm.createMulticastLock("neon-arena-discovery");lock.setReferenceCounted(false);lock.acquire();}
-
                 String localIp=getLanIp();
-                DatagramSocket sock=new DatagramSocket();
-                sock.setBroadcast(true);
-                sock.setSoTimeout(250);
-                byte[] q="DISCOVER_NEON_ARENA".getBytes(StandardCharsets.UTF_8);
 
-                // Broadcast discovery first. Some Android hotspots filter broadcast packets,
-                // so we also probe every address in the local /24 below.
+                // UDP discovery is kept for fast discovery where the hotspot allows it.
                 try{
-                    DatagramPacket broadcast=new DatagramPacket(q,q.length,InetAddress.getByName("255.255.255.255"),DiscoveryServer.PORT);
-                    sock.send(broadcast);
+                    DatagramSocket sock=new DatagramSocket();
+                    sock.setBroadcast(true);
+                    byte[] q="DISCOVER_NEON_ARENA".getBytes(StandardCharsets.UTF_8);
+                    try{sock.send(new DatagramPacket(q,q.length,InetAddress.getByName("255.255.255.255"),DiscoveryServer.PORT));}catch(Exception ignored){}
+                    Set<String> targets=new HashSet<>(); addDiscoveryTarget(targets,localIp);
+                    for(String target:targets){try{sock.send(new DatagramPacket(q,q.length,InetAddress.getByName(target),DiscoveryServer.PORT));}catch(Exception ignored){}}
+                    sock.setSoTimeout(150);
+                    long end=System.currentTimeMillis()+900;
+                    while(System.currentTimeMillis()<end){
+                        byte[] buf=new byte[1024]; DatagramPacket p=new DatagramPacket(buf,buf.length);
+                        try{sock.receive(p);}catch(java.net.SocketTimeoutException timeout){continue;}
+                        addGameJson(games,seen,new String(p.getData(),p.getOffset(),p.getLength(),StandardCharsets.UTF_8),p.getAddress().getHostAddress());
+                    }
+                    sock.close();
                 }catch(Exception ignored){}
 
-                Set<String> targets=new HashSet<>();
-                addDiscoveryTarget(targets,localIp);
-                for(String target:targets){
-                    try{
-                        DatagramPacket req=new DatagramPacket(q,q.length,InetAddress.getByName(target),DiscoveryServer.PORT);
-                        sock.send(req);
-                    }catch(Exception ignored){}
+                // TCP fallback: Android hotspots often block UDP broadcast. We probe the
+                // small port range used by our server and ask /info directly.
+                ExecutorService pool=Executors.newFixedThreadPool(32);
+                Set<String> targets=new HashSet<>(); addDiscoveryTarget(targets,localIp);
+                for(String ip:targets){
+                    for(int port=8080;port<8100;port++){
+                        final String host=ip; final int p=port;
+                        pool.submit(()->probeHttp(host,p,games,seen));
+                    }
                 }
-
-                long end=System.currentTimeMillis()+1800;
-                while(System.currentTimeMillis()<end){
-                    byte[] buf=new byte[1024]; DatagramPacket p=new DatagramPacket(buf,buf.length);
-                    try{sock.receive(p);}catch(java.net.SocketTimeoutException timeout){continue;}
-                    try{
-                        JSONObject o=new JSONObject(new String(p.getData(),p.getOffset(),p.getLength(),StandardCharsets.UTF_8));
-                        String ip=p.getAddress().getHostAddress();
-                        int port=o.optInt("port",0);
-                        String key=ip+":"+port;
-                        if(port>0 && seen.add(key)){
-                            o.put("ip",ip);
-                            games.put(o);
-                        }
-                    }catch(Exception ignored){}
-                }
-                sock.close();
+                pool.shutdown();
+                pool.awaitTermination(4,TimeUnit.SECONDS);
             }catch(Exception ignored){}finally{if(lock!=null)try{lock.release();}catch(Exception ignored){}}
             final String out=games.toString();
             runOnUiThread(()->web.evaluateJavascript("window.discoveryResult && window.discoveryResult("+jsQuote(out)+")",null));
         },"neon-arena-scan").start();
+    }
+
+    private void addGameJson(JSONArray games,Set<String> seen,String raw,String ip){
+        try{
+            JSONObject o=new JSONObject(raw);
+            int port=o.optInt("port",0);
+            if(!o.optBoolean("game",false) || port<=0)return;
+            String key=ip+":"+port;
+            if(seen.add(key)){o.put("ip",ip);games.put(o);}
+        }catch(Exception ignored){}
+    }
+
+    private void probeHttp(String ip,int port,JSONArray games,Set<String> seen){
+        try(Socket s=new Socket()){
+            s.connect(new java.net.InetSocketAddress(ip,port),180);
+            s.setSoTimeout(350);
+            OutputStream out=s.getOutputStream();
+            out.write(("GET /info HTTP/1.1\r\nHost: "+ip+"\r\nConnection: close\r\n\r\n").getBytes(StandardCharsets.US_ASCII));
+            out.flush();
+            BufferedReader r=new BufferedReader(new InputStreamReader(s.getInputStream(),StandardCharsets.UTF_8));
+            String line; StringBuilder body=new StringBuilder(); boolean bodyStarted=false;
+            while((line=r.readLine())!=null){
+                if(bodyStarted)body.append(line);
+                else if(line.isEmpty())bodyStarted=true;
+            }
+            addGameJson(games,seen,body.toString(),ip);
+        }catch(Exception ignored){}
     }
 
     public class Bridge{
