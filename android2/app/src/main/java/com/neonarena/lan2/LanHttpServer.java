@@ -11,7 +11,8 @@ import java.util.Enumeration;
 public class LanHttpServer extends NanoHTTPD {
     private final Context ctx;
     private final int wsPort;
-    public LanHttpServer(Context c, int port, int websocketPort) { super(port); ctx = c; wsPort = websocketPort; }
+    private final String playerName;
+    public LanHttpServer(Context c, int port, int websocketPort, String name) { super(port); ctx = c; wsPort = websocketPort; playerName = name == null ? "Игрок" : name; }
 
     public String getLanIp() {
         try {
@@ -35,12 +36,14 @@ public class LanHttpServer extends NanoHTTPD {
         } catch (Exception e) { return "127.0.0.1"; }
     }
 
+    private String json(String s){ return s.replace("\\","\\\\").replace("\"","\\\"").replace("\n"," "); }
+
     @Override public Response serve(IHTTPSession session) {
         try {
             String uri = session.getUri();
             if ("/info".equals(uri)) {
                 String ip = getLanIp();
-                String json = "{\"ok\":true,\"port\":" + getListeningPort() + ",\"wsPort\":" + wsPort + ",\"ip\":\"" + ip + "\",\"url\":\"http://" + ip + ":" + getListeningPort() + "\"}";
+                String json = "{\"ok\":true,\"game\":true,\"name\":\"" + json(playerName) + "\",\"port\":" + getListeningPort() + ",\"wsPort\":" + wsPort + ",\"ip\":\"" + ip + "\",\"url\":\"http://" + ip + ":" + getListeningPort() + "\"}";
                 return newFixedLengthResponse(Response.Status.OK, "application/json; charset=utf-8", json);
             }
             String name = "/".equals(uri) ? "index.html" : uri.substring(1);
