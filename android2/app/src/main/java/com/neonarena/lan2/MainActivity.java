@@ -21,8 +21,8 @@ public class MainActivity extends Activity {
     private final int HTTP_PORT=8080, WS_PORT=8081;
 
     @Override public void onCreate(Bundle b){
-        super.onCreate(b);
         requestWindowFeature(Window.FEATURE_NO_TITLE);
+        super.onCreate(b);
         web=new WebView(this);
         WebSettings s=web.getSettings(); s.setJavaScriptEnabled(true); s.setDomStorageEnabled(true); s.setMediaPlaybackRequiresUserGesture(false);
         web.setWebViewClient(new WebViewClient());
