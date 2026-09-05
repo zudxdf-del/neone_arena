@@ -23,7 +23,7 @@ function reset(room){
   room.bullets=[]; room.running=true;
 }
 function send(ws,obj){ if(ws && ws.readyState===1) ws.send(JSON.stringify(obj)); }
-function snapshot(r){ return {type:'snapshot', world:WORLD, players:r.players.map(p=>({x:p.x,y:p.y,hp:p.hp,score:p.score})), bullets:r.bullets.map(b=>({x:b.x,y:b.y,owner:b.owner}))}; }
+function snapshot(r){ return {type:'snapshot', world:WORLD, players:r.players.map(p=>({x:p.x,y:p.y,hp:p.hp,score:p.score,name:p.name})), bullets:r.bullets.map(b=>({x:b.x,y:b.y,owner:b.owner}))}; }
 function broadcast(r,obj){ r.players.forEach(p=>send(p?.ws,obj)); }
 function closeRoomIfEmpty(r){ if(!r.players[0]&&!r.players[1]) rooms.delete(r.code); }
 function endRound(r,winner){
@@ -88,18 +88,21 @@ wss.on('connection',(ws)=>{
     if(m.type==='create'){
       if(room) return;
       room=makeRoom(); index=0;
-      room.players[0]={ws,input:{x:0,y:0},x:250,y:350,hp:100,score:0,lastShot:0};
-      send(ws,{type:'created',room:room.code});
+      const name=String(m.name||'Игрок 1').trim().slice(0,20)||'Игрок 1';
+      room.players[0]={ws,input:{x:0,y:0},x:250,y:350,hp:100,score:0,lastShot:0,name};
+      send(ws,{type:'created',room:room.code,player:0,name});
       return;
     }
     if(m.type==='join'){
       if(room) return;
       const r=waitingRoom();
-      if(!r) return send(ws,{type:'error',message:'Игра не найдена. Сначала нажми «Создать игру» на первом устройстве.'});
+      if(!r) return send(ws,{type:'error',message:'Игра не найдена. Сначала создай игру на первом устройстве.'});
       room=r; index=1;
-      room.players[1]={ws,input:{x:0,y:0},x:750,y:350,hp:100,score:0,lastShot:0};
+      const name=String(m.name||'Игрок 2').trim().slice(0,20)||'Игрок 2';
+      room.players[1]={ws,input:{x:0,y:0},x:750,y:350,hp:100,score:0,lastShot:0,name};
       reset(room);
-      broadcast(room,{type:'start',room:room.code});
+      send(room.players[0].ws,{type:'start',room:room.code,player:0,players:room.players.map(p=>({name:p.name}))});
+      send(room.players[1].ws,{type:'start',room:room.code,player:1,players:room.players.map(p=>({name:p.name}))});
       return;
     }
     if(!room || index<0) return;
