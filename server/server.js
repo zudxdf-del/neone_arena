@@ -61,7 +61,7 @@ const server=http.createServer((req,res)=>{
   const u=(req.url||'/').split('?')[0];
   if(u==='/health'){res.writeHead(200,{'content-type':'application/json'});return res.end(JSON.stringify({ok:true,rooms:rooms.size}));}
   if(u==='/' || u==='/index.html'){
-    const file=path.join(__dirname,'index.html');
+    const file=path.join(__dirname,'..','index.html');
     fs.readFile(file,(err,data)=>{
       if(err){res.writeHead(500,{'content-type':'text/plain; charset=utf-8'});return res.end('index.html not found');}
       res.writeHead(200,{'content-type':'text/html; charset=utf-8','cache-control':'no-store'});res.end(data);
