@@ -139,7 +139,8 @@ public class MainActivity extends Activity {
                 pool.shutdown();
                 pool.awaitTermination(4,TimeUnit.SECONDS);
             }catch(Exception ignored){}finally{if(lock!=null)try{lock.release();}catch(Exception ignored){}}
-            final String out=games.toString();
+            final String out;
+            synchronized(games){ out=games.toString(); }
             runOnUiThread(()->web.evaluateJavascript("window.discoveryResult && window.discoveryResult("+jsQuote(out)+")",null));
         },"neon-arena-scan").start();
     }
@@ -150,7 +151,11 @@ public class MainActivity extends Activity {
             int port=o.optInt("port",0);
             if(!o.optBoolean("game",false) || port<=0)return;
             String key=ip+":"+port;
-            if(seen.add(key)){o.put("ip",ip);games.put(o);}
+            synchronized(seen){
+                if(seen.add(key)){
+                    synchronized(games){o.put("ip",ip);games.put(o);}
+                }
+            }
         }catch(Exception ignored){}
     }
 
