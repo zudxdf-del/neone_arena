@@ -1,6 +1,7 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
 const { WebSocketServer } = require('ws');
 
 const PORT = Number(process.env.PORT || 8080);
@@ -15,6 +16,7 @@ const rooms = new Map();
 const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 function roomCode(){ let s=''; for(let i=0;i<6;i++) s += alphabet[Math.floor(Math.random()*alphabet.length)]; return s; }
 function makeRoom(){ let c; do c=roomCode(); while(rooms.has(c)); const r={code:c,players:[null,null],bullets:[],lastTick:Date.now(),scores:[0,0],running:false}; rooms.set(c,r); return r; }
+function waitingRoom(){ for(const r of rooms.values()) if(r.players[0] && !r.players[1]) return r; return null; }
 function reset(room){
   room.players[0].x=250; room.players[0].y=350; room.players[0].hp=100;
   room.players[1].x=750; room.players[1].y=350; room.players[1].hp=100;
@@ -27,7 +29,7 @@ function closeRoomIfEmpty(r){ if(!r.players[0]&&!r.players[1]) rooms.delete(r.co
 function endRound(r,winner){
   r.scores[winner]++;
   r.players.forEach((p,i)=>{ if(p) p.score=r.scores[i]; });
-  broadcast(r,{type:'round', winner, scores:r.scores});
+  broadcast(r,{type:'round',winner,scores:r.scores});
   reset(r);
 }
 function fire(r,i){
@@ -35,7 +37,7 @@ function fire(r,i){
   const p=r.players[i], other=r.players[1-i];
   if(!p||!other) return;
   const now=Date.now(); if(now-p.lastShot<FIRE_COOLDOWN) return; p.lastShot=now;
-  let dx=other.x-p.x, dy=other.y-p.y, len=Math.hypot(dx,dy)||1;
+  const dx=other.x-p.x, dy=other.y-p.y, len=Math.hypot(dx,dy)||1;
   r.bullets.push({owner:i,x:p.x,y:p.y,vx:dx/len*BULLET_SPEED,vy:dy/len*BULLET_SPEED,life:1.6});
 }
 function tick(r,dt){
@@ -56,10 +58,16 @@ function tick(r,dt){
   }
   r.bullets=r.bullets.filter(b=>b.life>0 && b.x>-50 && b.x<WORLD.w+50 && b.y>20 && b.y<WORLD.h+50);
 }
+function lanAddresses(){
+  const out=[]; const nets=os.networkInterfaces();
+  for(const name of Object.keys(nets)) for(const n of (nets[name]||[])) if(n.family==='IPv4' && !n.internal) out.push(n.address);
+  return out;
+}
 
 const server=http.createServer((req,res)=>{
   const u=(req.url||'/').split('?')[0];
-  if(u==='/health'){res.writeHead(200,{'content-type':'application/json'});return res.end(JSON.stringify({ok:true,rooms:rooms.size}));}
+  if(u==='/health'){res.writeHead(200,{'content-type':'application/json; charset=utf-8'});return res.end(JSON.stringify({ok:true,rooms:rooms.size}));}
+  if(u==='/info'){res.writeHead(200,{'content-type':'application/json; charset=utf-8','cache-control':'no-store'});return res.end(JSON.stringify({ok:true,port:PORT,addresses:lanAddresses(),rooms:rooms.size}));}
   if(u==='/' || u==='/index.html'){
     const file=path.join(__dirname,'..','index.html');
     fs.readFile(file,(err,data)=>{
@@ -86,8 +94,8 @@ wss.on('connection',(ws)=>{
     }
     if(m.type==='join'){
       if(room) return;
-      const code=String(m.room||'').toUpperCase(); const r=rooms.get(code);
-      if(!r || r.players[1]) return send(ws,{type:'error',message:'Комната не найдена или уже занята.'});
+      const r=waitingRoom();
+      if(!r) return send(ws,{type:'error',message:'Игра не найдена. Сначала нажми «Создать игру» на первом устройстве.'});
       room=r; index=1;
       room.players[1]={ws,input:{x:0,y:0},x:750,y:350,hp:100,score:0,lastShot:0};
       reset(room);
@@ -116,4 +124,7 @@ setInterval(()=>{
   }
 },TICK);
 
-server.listen(PORT,'0.0.0.0',()=>console.log(`NEON ARENA server listening on ${PORT}`));
+server.listen(PORT,'0.0.0.0',()=>{
+  console.log(`NEON ARENA server listening on ${PORT}`);
+  for(const a of lanAddresses()) console.log(`LAN: http://${a}:${PORT}`);
+});
