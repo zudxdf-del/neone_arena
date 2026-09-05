@@ -10,7 +10,8 @@ import java.util.Enumeration;
 
 public class LanHttpServer extends NanoHTTPD {
     private final Context ctx;
-    public LanHttpServer(Context c, int port) { super(port); ctx = c; }
+    private final int wsPort;
+    public LanHttpServer(Context c, int port, int websocketPort) { super(port); ctx = c; wsPort = websocketPort; }
 
     public String getLanIp() {
         try {
@@ -24,7 +25,7 @@ public class LanHttpServer extends NanoHTTPD {
                     InetAddress a = as.nextElement();
                     if (!(a instanceof Inet4Address) || a.isLoopbackAddress()) continue;
                     String ip = a.getHostAddress();
-                    if (ip.startsWith("192.168.") || ip.startsWith("10.") || ip.startsWith("172.")) {
+                    if (ip.startsWith("192.168.") || ip.startsWith("10.") || ip.matches("172\\.(1[6-9]|2[0-9]|3[0-1])\\..*")) {
                         if (name.contains("wlan") || name.contains("wifi") || name.contains("ap") || name.contains("swlan")) return ip;
                         if (fallback == null) fallback = ip;
                     }
@@ -39,7 +40,7 @@ public class LanHttpServer extends NanoHTTPD {
             String uri = session.getUri();
             if ("/info".equals(uri)) {
                 String ip = getLanIp();
-                String json = "{\"ok\":true,\"port\":8080,\"wsPort\":8081,\"ip\":\"" + ip + "\",\"url\":\"http://" + ip + ":8080\"}";
+                String json = "{\"ok\":true,\"port\":" + getListeningPort() + ",\"wsPort\":" + wsPort + ",\"ip\":\"" + ip + "\",\"url\":\"http://" + ip + ":" + getListeningPort() + "\"}";
                 return newFixedLengthResponse(Response.Status.OK, "application/json; charset=utf-8", json);
             }
             String name = "/".equals(uri) ? "index.html" : uri.substring(1);
