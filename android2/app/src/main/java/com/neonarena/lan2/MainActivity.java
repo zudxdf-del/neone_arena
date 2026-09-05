@@ -18,6 +18,8 @@ import java.net.NetworkInterface;
 import java.net.ServerSocket;
 import java.nio.charset.StandardCharsets;
 import java.util.Enumeration;
+import java.util.HashSet;
+import java.util.Set;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
@@ -76,28 +78,63 @@ public class MainActivity extends Activity {
             } return fallback==null?"127.0.0.1":fallback;
         }catch(Exception e){return "127.0.0.1";}
     }
-    private String getLanUrl(){return "http://"+getLanIp()+":"+httpPort;}
     private String getWsUrl(){return "ws://"+getLanIp()+":"+wsPort;}
+    private String getLanUrl(){return "http://"+getLanIp()+":"+httpPort;}
     private String jsQuote(String x){return "\""+x.replace("\\","\\\\").replace("\"","\\\"")+"\"";}
+
+    private void addDiscoveryTarget(Set<String> targets,String ip){
+        if(ip==null||ip.length()==0||"127.0.0.1".equals(ip))return;
+        int dot=ip.lastIndexOf('.');
+        if(dot>0){
+            String prefix=ip.substring(0,dot);
+            for(int i=1;i<=254;i++)targets.add(prefix+"."+i);
+        }
+    }
+
     private void discoverGames(){
         new Thread(()->{
             JSONArray games=new JSONArray();
+            Set<String> seen=new HashSet<>();
             WifiManager.MulticastLock lock=null;
             try{
                 WifiManager wm=(WifiManager)getApplicationContext().getSystemService(Context.WIFI_SERVICE);
                 if(wm!=null){lock=wm.createMulticastLock("neon-arena-discovery");lock.setReferenceCounted(false);lock.acquire();}
-                DatagramSocket sock=new DatagramSocket(); sock.setBroadcast(true); sock.setSoTimeout(1200);
+
+                String localIp=getLanIp();
+                DatagramSocket sock=new DatagramSocket();
+                sock.setBroadcast(true);
+                sock.setSoTimeout(250);
                 byte[] q="DISCOVER_NEON_ARENA".getBytes(StandardCharsets.UTF_8);
-                DatagramPacket req=new DatagramPacket(q,q.length,InetAddress.getByName("255.255.255.255"),DiscoveryServer.PORT);
-                sock.send(req);
-                long end=System.currentTimeMillis()+1200;
+
+                // Broadcast discovery first. Some Android hotspots filter broadcast packets,
+                // so we also probe every address in the local /24 below.
+                try{
+                    DatagramPacket broadcast=new DatagramPacket(q,q.length,InetAddress.getByName("255.255.255.255"),DiscoveryServer.PORT);
+                    sock.send(broadcast);
+                }catch(Exception ignored){}
+
+                Set<String> targets=new HashSet<>();
+                addDiscoveryTarget(targets,localIp);
+                for(String target:targets){
+                    try{
+                        DatagramPacket req=new DatagramPacket(q,q.length,InetAddress.getByName(target),DiscoveryServer.PORT);
+                        sock.send(req);
+                    }catch(Exception ignored){}
+                }
+
+                long end=System.currentTimeMillis()+1800;
                 while(System.currentTimeMillis()<end){
                     byte[] buf=new byte[1024]; DatagramPacket p=new DatagramPacket(buf,buf.length);
-                    try{sock.receive(p);}catch(Exception timeout){break;}
+                    try{sock.receive(p);}catch(java.net.SocketTimeoutException timeout){continue;}
                     try{
                         JSONObject o=new JSONObject(new String(p.getData(),p.getOffset(),p.getLength(),StandardCharsets.UTF_8));
-                        o.put("ip",p.getAddress().getHostAddress());
-                        games.put(o);
+                        String ip=p.getAddress().getHostAddress();
+                        int port=o.optInt("port",0);
+                        String key=ip+":"+port;
+                        if(port>0 && seen.add(key)){
+                            o.put("ip",ip);
+                            games.put(o);
+                        }
                     }catch(Exception ignored){}
                 }
                 sock.close();
@@ -106,6 +143,7 @@ public class MainActivity extends Activity {
             runOnUiThread(()->web.evaluateJavascript("window.discoveryResult && window.discoveryResult("+jsQuote(out)+")",null));
         },"neon-arena-scan").start();
     }
+
     public class Bridge{
         @JavascriptInterface public void startServer(String name){runOnUiThread(()->startServers(name));}
         @JavascriptInterface public String getLanUrl(){return MainActivity.this.getLanUrl();}
