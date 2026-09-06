@@ -1,6 +1,6 @@
 [gd_scene load_steps=3 format=3]
 
-[ext_resource path="res://godot/main.gd" type="Script" id="1"]
+[ext_resource path="res://godot/game.gd" type="Script" id="1"]
 [ext_resource path="res://godot/lobby.gd" type="Script" id="2"]
 
 [node name="NeonArena" type="Node3D"]
