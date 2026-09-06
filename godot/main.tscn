@@ -1,0 +1,10 @@
+[gd_scene load_steps=3 format=3]
+
+[ext_resource path="res://godot/game_final.gd" type="Script" id="1"]
+[ext_resource path="res://godot/lobby.gd" type="Script" id="2"]
+
+[node name="NeonArena" type="Node3D"]
+script = ExtResource("1")
+
+[node name="Lobby" type="Node" parent="."]
+script = ExtResource("2")
