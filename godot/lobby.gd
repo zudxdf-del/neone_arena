@@ -92,7 +92,6 @@ func _on_net_message(data: Dictionary) -> void:
         room_code = str(data.get("room", room_code))
         player_count = int(data.get("maxPlayers", player_count))
         current_players = data.get("players", [])
-        is_host = int(data.get("selfId", -1)) == int(data.get("host", -2))
         in_lobby = true
         _show_lobby()
     elif t == "start":
@@ -181,7 +180,7 @@ func _refresh_lobby() -> void:
     if not panel: return
     room_code_label.text = "КОД КОМНАТЫ:  " + room_code
     for c in players_box.get_children(): c.queue_free()
-    var actual := 0
+    var real_count := 0
     for p in current_players:
         if p == null: continue
         var row := Label.new()
@@ -191,20 +190,18 @@ func _refresh_lobby() -> void:
         row.add_theme_font_size_override("font_size", 21)
         row.modulate = Color("#5ceeff") if bool(p.get("host", false)) else Color("#ff7898")
         players_box.add_child(row)
-        actual += 1
-    while actual < player_count:
+        real_count += 1
+    var slots := player_count - real_count
+    for i in range(max(0, slots)):
         var wait := Label.new()
         wait.text = "  ○  Ожидание игрока..."
         wait.custom_minimum_size = Vector2(850, 43)
         wait.add_theme_font_size_override("font_size", 19)
         wait.modulate = Color("#536c85")
         players_box.add_child(wait)
-        actual += 1
-    var real_count := 0
-    for p in current_players:
-        if p != null: real_count += 1
     count_label.text = "ИГРОКОВ: %d / %d" % [real_count, player_count]
     start_button.disabled = not is_host or real_count < 2
+    start_button.text = "НАЧАТЬ ИГРУ"
 
 func _start_game() -> void:
     if not is_host or not net or room_code == "": return
