@@ -28,15 +28,12 @@ func _ready() -> void:
 
 func _hook_buttons() -> void:
     for n in root.find_children("*", "Button", true, false):
-        if not n is Button:
-            continue
+        if not n is Button: continue
         if n.text == "СОЗДАТЬ ИГРУ":
-            if n.pressed.is_connected(root._create_room):
-                n.pressed.disconnect(root._create_room)
+            if n.pressed.is_connected(root._create_room): n.pressed.disconnect(root._create_room)
             n.pressed.connect(_create_room)
         elif n.text == "ПОДКЛЮЧИТЬСЯ":
-            if n.pressed.is_connected(root._join_room):
-                n.pressed.disconnect(root._join_room)
+            if n.pressed.is_connected(root._join_room): n.pressed.disconnect(root._join_room)
             n.pressed.connect(_join_room)
 
 func _build_player_selector() -> void:
@@ -64,8 +61,7 @@ func set_player_count(value: int) -> void:
     player_count = clamp(value, 2, 8)
     if selector_box:
         for c in selector_box.get_children():
-            if c is Button:
-                c.modulate = Color("#48ff9a") if int(c.text) == player_count else Color("#ffffff")
+            if c is Button: c.modulate = Color("#48ff9a") if int(c.text) == player_count else Color("#ffffff")
 
 func _create_room() -> void:
     if not net or not root.connected:
@@ -96,11 +92,7 @@ func _on_net_message(data: Dictionary) -> void:
         room_code = str(data.get("room", room_code))
         player_count = int(data.get("maxPlayers", player_count))
         current_players = data.get("players", [])
-        var me := false
-        for p in current_players:
-            if p != null and bool(p.get("host", false)) and int(p.get("id", -1)) == 0:
-                me = true
-        is_host = me if room_code != "" else is_host
+        is_host = int(data.get("selfId", -1)) == int(data.get("host", -2))
         in_lobby = true
         _show_lobby()
     elif t == "start":
@@ -115,8 +107,7 @@ func _on_net_message(data: Dictionary) -> void:
         root.status_label.text = str(data.get("message", "Ошибка сервера"))
 
 func _show_lobby() -> void:
-    if not panel:
-        _build_lobby()
+    if not panel: _build_lobby()
     panel.visible = true
     root.menu.visible = false
     root.hud.visible = false
@@ -149,7 +140,6 @@ func _build_lobby() -> void:
     room_code_label = Label.new()
     room_code_label.position = Vector2(195, 145)
     room_code_label.add_theme_font_size_override("font_size", 24)
-    room_code_label.modulate = Color("#ffffff")
     panel.add_child(room_code_label)
     var hint := Label.new()
     hint.text = "Отправьте код комнаты друзьям. Список игроков обновляется автоматически."
@@ -191,7 +181,7 @@ func _refresh_lobby() -> void:
     if not panel: return
     room_code_label.text = "КОД КОМНАТЫ:  " + room_code
     for c in players_box.get_children(): c.queue_free()
-    var count := 0
+    var actual := 0
     for p in current_players:
         if p == null: continue
         var row := Label.new()
@@ -201,18 +191,20 @@ func _refresh_lobby() -> void:
         row.add_theme_font_size_override("font_size", 21)
         row.modulate = Color("#5ceeff") if bool(p.get("host", false)) else Color("#ff7898")
         players_box.add_child(row)
-        count += 1
-    while count < player_count:
+        actual += 1
+    while actual < player_count:
         var wait := Label.new()
         wait.text = "  ○  Ожидание игрока..."
         wait.custom_minimum_size = Vector2(850, 43)
         wait.add_theme_font_size_override("font_size", 19)
         wait.modulate = Color("#536c85")
         players_box.add_child(wait)
-        count += 1
-    var actual := current_players.size()
-    count_label.text = "ИГРОКОВ: %d / %d" % [actual, player_count]
-    start_button.disabled = not is_host or actual < 2
+        actual += 1
+    var real_count := 0
+    for p in current_players:
+        if p != null: real_count += 1
+    count_label.text = "ИГРОКОВ: %d / %d" % [real_count, player_count]
+    start_button.disabled = not is_host or real_count < 2
 
 func _start_game() -> void:
     if not is_host or not net or room_code == "": return
@@ -221,8 +213,7 @@ func _start_game() -> void:
     start_button.text = "ЗАПУСК..."
 
 func _leave_lobby() -> void:
-    if net:
-        net.close()
+    if net: net.close()
     in_lobby = false
     is_host = false
     current_players.clear()
