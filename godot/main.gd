@@ -1,9 +1,5 @@
 extends Node3D
 
-# NEON ARENA — complete Godot 4 rebuild.
-# This version deliberately does not depend on the network to show a complete game scene.
-# A local training opponent is always visible; server snapshots replace it when online.
-
 const NET_SCRIPT = preload("res://godot/network.gd")
 const S := 0.02
 const WORLD_W := 1000.0
@@ -11,7 +7,6 @@ const WORLD_H := 700.0
 const ARENA_W := WORLD_W * S
 const ARENA_H := WORLD_H * S
 const PLAYER_Y := 0.0
-const BOT_ID := 1
 
 const OBSTACLES := [
     {"x": 420.0, "y": 120.0, "w": 160.0, "h": 45.0},
@@ -28,7 +23,6 @@ var actors: Node3D
 var fx: Node3D
 var camera: Camera3D
 var net: NeonNetwork
-
 var menu: Control
 var hud: Control
 var room_code_edit: LineEdit
@@ -55,9 +49,7 @@ var local_id := 0
 var connected := false
 var in_match := false
 var fire_down := false
-var reload_down := false
 var joystick_touch := -1
-var joystick_start := Vector2.ZERO
 var joystick_vec := Vector2.ZERO
 var aim_angle := 0.0
 var camera_yaw := 0.0
@@ -67,7 +59,6 @@ var bot_shot_timer := 1.2
 var bot_phase := 0.0
 var flash_timer := 0.0
 var round_time := 0.0
-
 var local_hp := 100.0
 var local_score := 0
 var local_ammo := 12
@@ -78,7 +69,6 @@ var local_pos := Vector2(250, 350)
 var bot_pos := Vector2(750, 350)
 var bot_hp := 100.0
 var bot_score := 0
-
 var server_players: Array = []
 var server_bullets: Array = []
 var use_server_state := false
@@ -93,15 +83,21 @@ func _ready() -> void:
     _start_local_match()
 
 func _process(delta: float) -> void:
-    _animate_world(delta)
+    _animate_world()
     if in_match:
         _process_local_match(delta)
         _process_bot(delta)
         _process_network_input(delta)
         _update_camera(delta)
         _update_hud()
-    else:
-        _update_menu_animation(delta)
+
+func _animate_world() -> void:
+    var pulse := 1.0 + sin(Time.get_ticks_msec() / 220.0) * 0.12
+    for child in arena.get_children():
+        if child is MeshInstance3D and child.material_override is StandardMaterial3D:
+            var mat := child.material_override as StandardMaterial3D
+            if mat.emission_enabled and mat.emission_energy_multiplier > 2.0:
+                mat.emission_energy_multiplier = clamp(mat.emission_energy_multiplier * 0.98 + pulse * 0.08, 1.5, 5.5)
 
 func _build_arena() -> void:
     arena = Node3D.new()
@@ -121,7 +117,6 @@ func _build_arena() -> void:
     env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
     env.ambient_light_color = Color("#8ac8ff")
     env.ambient_light_energy = 1.25
-    env.reflected_light_source = Environment.REFLECTION_SOURCE_DISABLED
     env_node.environment = env
     arena.add_child(env_node)
 
@@ -136,7 +131,6 @@ func _build_arena() -> void:
     floor.position = Vector3(ARENA_W / 2.0, -0.08, ARENA_H / 2.0)
     arena.add_child(floor)
 
-    # Grid is deliberately oversized and bright enough to read on a phone.
     for x in range(0, 51):
         var gx := _box(Vector3(0.012, 0.018, ARENA_H), Color("#12345a"), Color("#12345a"), 1.2)
         gx.position = Vector3(x * ARENA_W / 50.0, 0.01, ARENA_H / 2.0)
@@ -170,7 +164,8 @@ func _build_border() -> void:
     arena.add_child(east)
 
 func _build_obstacle(o: Dictionary) -> void:
-    var size := Vector3(float(o.w) * S, 1.25, float(o.h) * S)
+    var size := Vector3(float(o.x + o.w - o.x) * S, 1.25, float(o.h) * S)
+    size.x = float(o.w) * S
     var center := Vector3((float(o.x)+float(o.w)/2.0)*S, 0.62, (float(o.y)+float(o.h)/2.0)*S)
     var wall := _box(size, Color("#182b54"), Color("#167cff"), 1.8)
     wall.position = center
@@ -223,7 +218,7 @@ func _ring(color: Color, radius: float, height: float) -> MeshInstance3D:
     mesh.height = height
     m.mesh = mesh
     var mat := StandardMaterial3D.new()
-    mat.albedo_color = Color(color, 0.9)
+    mat.albedo_color = color
     mat.emission_enabled = true
     mat.emission = color
     mat.emission_energy_multiplier = 2.5
@@ -243,8 +238,7 @@ func _build_camera() -> void:
 func _make_player(is_local: bool) -> Node3D:
     var root := Node3D.new()
     root.name = "LOCAL_PLAYER" if is_local else "ENEMY_PLAYER"
-
-    var shadow := _box(Vector3(0.95, 0.025, 0.95), Color("#000000"), Color("#000000"), 0)
+    var shadow := _box(Vector3(0.95, 0.025, 0.95), Color("#000000"))
     shadow.position.y = 0.03
     root.add_child(shadow)
 
@@ -285,7 +279,7 @@ func _make_player(is_local: bool) -> Node3D:
     ring.position.y = 0.05
     root.add_child(ring)
 
-    var hp_bg := _box(Vector3(1.0, 0.08, 0.06), Color("#160a12"), Color.BLACK, 0)
+    var hp_bg := _box(Vector3(1.0, 0.08, 0.06), Color("#160a12"))
     hp_bg.position = Vector3(0, 2.05, 0)
     root.add_child(hp_bg)
     var hp_fg := _box(Vector3(0.96, 0.055, 0.065), Color("#4dff91") if is_local else Color("#ff4775"), Color("#4dff91") if is_local else Color("#ff4775"), 2.5)
@@ -323,13 +317,15 @@ func _start_local_match() -> void:
     bot_hp = 100
     local_ammo = 12
     local_weapon = "pistol"
+    local_mag = 12
     local_score = 0
     bot_score = 0
+    use_server_state = false
     _clear_actors()
     _ensure_visual_player(0, true)
     _ensure_visual_player(1, false)
     _sync_local_visuals()
-    event_label.text = "БОЕВОЙ ПОЛИГОН • ВТОРОЙ ИГРОК УЖЕ НА КАРТЕ"
+    event_label.text = "БОЕВОЙ ПОЛИГОН • ВТОРОЙ ИГРОК НА КАРТЕ"
 
 func _clear_actors() -> void:
     for c in actors.get_children():
@@ -350,8 +346,7 @@ func _sync_local_visuals() -> void:
     visual_players[0].position = Vector3(local_pos.x*S, PLAYER_Y, local_pos.y*S)
     visual_players[0].rotation.y = -aim_angle
     visual_players[1].position = Vector3(bot_pos.x*S, PLAYER_Y, bot_pos.y*S)
-    var ba := atan2(local_pos.y-bot_pos.y, local_pos.x-bot_pos.x)
-    visual_players[1].rotation.y = -ba
+    visual_players[1].rotation.y = -atan2(local_pos.y-bot_pos.y, local_pos.x-bot_pos.x)
     _set_hp_visual(visual_players[0], local_hp)
     _set_hp_visual(visual_players[1], bot_hp)
 
@@ -370,16 +365,13 @@ func _process_local_match(delta: float) -> void:
         move = joystick_vec
     if move.length() > 1.0:
         move = move.normalized()
-    var speed := 260.0
-    var next := local_pos + move * speed * delta
+    var next := local_pos + move * 260.0 * delta
     if not _blocked(next, 18.0):
         local_pos = next
     local_pos.x = clamp(local_pos.x, 28.0, WORLD_W-28.0)
     local_pos.y = clamp(local_pos.y, 28.0, WORLD_H-28.0)
     if fire_down:
         _local_fire()
-    if reload_down:
-        _reload_local()
     _sync_local_visuals()
 
 func _keyboard_move() -> Vector2:
@@ -395,14 +387,11 @@ func _process_bot(delta: float) -> void:
         return
     bot_phase += delta
     bot_shot_timer -= delta
-    var target := local_pos
-    var dir := target - bot_pos
+    var dir := local_pos - bot_pos
     if dir.length() > 190:
-        var move := dir.normalized()
-        move += Vector2(cos(bot_phase*1.7), sin(bot_phase*1.3)) * 0.28
-        var next := bot_pos + move.normalized() * 92.0 * delta
-        if not _blocked(next, 18.0):
-            bot_pos = next
+        var move := dir.normalized() + Vector2(cos(bot_phase*1.7), sin(bot_phase*1.3))*0.28
+        var next := bot_pos + move.normalized()*92.0*delta
+        if not _blocked(next, 18.0): bot_pos = next
     if bot_shot_timer <= 0:
         bot_shot_timer = 1.0 + fmod(abs(sin(bot_phase)), 1.5)
         _bot_fire()
@@ -419,20 +408,23 @@ func _local_fire() -> void:
     _spawn_shot_fx(local_pos, aim_angle, Color("#5cf4ff"))
     var dir := Vector2(cos(aim_angle), sin(aim_angle))
     var to_bot := bot_pos - local_pos
-    if dir.dot(to_bot.normalized()) > 0.94 and _line_clear(local_pos, bot_pos):
+    if to_bot.length() > 0 and dir.dot(to_bot.normalized()) > 0.94 and _line_clear(local_pos, bot_pos):
         bot_hp -= 25.0 if local_weapon == "pistol" else 12.0
         _hit_fx(bot_pos, Color("#ff386c"))
         if bot_hp <= 0:
             local_score += 1
-            event_label.text = "УНИЧТОЖЕНИЕ • ВТОРОЙ ИГРОК ВОЗРОДИЛСЯ"
+            event_label.text = "УНИЧТОЖЕНИЕ • ВРАГ ВОЗРОДИЛСЯ"
             bot_hp = 100
             bot_pos = Vector2(750, 350)
 
 func _bot_fire() -> void:
-    var dir := (local_pos - bot_pos).normalized()
+    var to_me := local_pos - bot_pos
+    if to_me.length() <= 0:
+        return
+    var dir := to_me.normalized()
     var angle := atan2(dir.y, dir.x)
     _spawn_shot_fx(bot_pos, angle, Color("#ff3d71"))
-    if _line_clear(bot_pos, local_pos) and dir.dot((local_pos-bot_pos).normalized()) > 0.96:
+    if _line_clear(bot_pos, local_pos):
         local_hp -= 15
         _hit_fx(local_pos, Color("#ff3d71"))
         if local_hp <= 0:
@@ -455,6 +447,7 @@ func _spawn_shot_fx(origin: Vector2, angle: float, color: Color) -> void:
     light.omni_range = 3.5
     root.add_child(light)
     get_tree().create_timer(0.08).timeout.connect(root.queue_free)
+    flash_timer = 0.08
 
 func _hit_fx(pos: Vector2, color: Color) -> void:
     var root := Node3D.new()
@@ -480,36 +473,23 @@ func _finish_reload() -> void:
     event_label.text = "ГОТОВО"
 
 func _blocked(p: Vector2, r: float) -> bool:
-    if p.x < r or p.y < r or p.x > WORLD_W-r or p.y > WORLD_H-r:
-        return true
+    if p.x < r or p.y < r or p.x > WORLD_W-r or p.y > WORLD_H-r: return true
     for o in OBSTACLES:
-        if p.x > o.x-r and p.x < o.x+o.w+r and p.y > o.y-r and p.y < o.y+o.h+r:
-            return true
+        if p.x > o.x-r and p.x < o.x+o.w+r and p.y > o.y-r and p.y < o.y+o.h+r: return true
     return false
 
 func _line_clear(a: Vector2, b: Vector2) -> bool:
     var steps := max(1, int(a.distance_to(b) / 12.0))
     for i in range(1, steps):
-        var p := a.lerp(b, float(i)/steps)
-        if _blocked(p, 5.0):
-            return false
+        if _blocked(a.lerp(b, float(i)/steps), 5.0): return false
     return true
 
 func _update_camera(delta: float) -> void:
-    if visual_players.size() < 2:
-        return
+    if visual_players.size() < 2: return
     var target := Vector3(local_pos.x*S, 0.4, local_pos.y*S)
     var desired := target + Vector3(5.6*sin(camera_yaw), 9.8, 5.6*cos(camera_yaw))
     camera.position = camera.position.lerp(desired, min(1.0, delta*7.0))
     camera.look_at(target, Vector3.UP)
-
-func _animate_world(delta: float) -> void:
-    var pulse := 1.0 + sin(Time.get_ticks_msec()/220.0)*0.12
-    for child in arena.get_children():
-        if child is MeshInstance3D and child.material_override is StandardMaterial3D:
-            var mat := child.material_override as StandardMaterial3D
-            if mat.emission_enabled and mat.emission_energy_multiplier > 2.0:
-                mat.emission_energy_multiplier = clamp(mat.emission_energy_multiplier * 0.98 + pulse*0.08, 1.5, 5.5)
 
 func _build_menu() -> void:
     menu = Control.new()
@@ -519,7 +499,6 @@ func _build_menu() -> void:
     bg.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
     bg.color = Color("#030814")
     menu.add_child(bg)
-
     var title := Label.new()
     title.text = "NEON ARENA"
     title.position = Vector2(48, 38)
@@ -532,61 +511,54 @@ func _build_menu() -> void:
     sub.add_theme_font_size_override("font_size", 20)
     sub.modulate = Color("#8eb9dc")
     menu.add_child(sub)
-
-    nick_edit = _input("НИК", "Игрок", Vector2(50, 160))
-    room_name_edit = _input("КОМНАТА", "NEON ROOM", Vector2(50, 220))
-    password_edit = _input("ПАРОЛЬ", "", Vector2(50, 280))
-    room_code_edit = _input("КОД КОМНАТЫ", "", Vector2(50, 340))
-
-    var create := _button("СОЗДАТЬ ИГРУ", Vector2(50, 415), Vector2(235, 58), Color("#00dfff"))
+    nick_edit = _make_field("НИК", "Игрок", Vector2(50,160))
+    room_name_edit = _make_field("КОМНАТА", "NEON ROOM", Vector2(50,220))
+    password_edit = _make_field("ПАРОЛЬ", "", Vector2(50,280))
+    room_code_edit = _make_field("КОД КОМНАТЫ", "", Vector2(50,340))
+    var create := _button("СОЗДАТЬ ИГРУ", Vector2(50,415), Vector2(235,58), Color("#00dfff"))
     create.pressed.connect(_create_room)
-    var join := _button("ПОДКЛЮЧИТЬСЯ", Vector2(300, 415), Vector2(235, 58), Color("#ff3f75"))
+    var join := _button("ПОДКЛЮЧИТЬСЯ", Vector2(300,415), Vector2(235,58), Color("#ff3f75"))
     join.pressed.connect(_join_room)
-    var refresh := _button("СПИСОК КОМНАТ", Vector2(50, 490), Vector2(235, 50), Color("#7aa9ff"))
+    var refresh := _button("СПИСОК КОМНАТ", Vector2(50,490), Vector2(235,50), Color("#7aa9ff"))
     refresh.pressed.connect(_refresh_rooms)
-    var training := _button("ИГРАТЬ ОДНОМУ", Vector2(300, 490), Vector2(235, 50), Color("#63ffad"))
+    var training := _button("ИГРАТЬ ОДНОМУ", Vector2(300,490), Vector2(235,50), Color("#63ffad"))
     training.pressed.connect(_start_local_match)
-
     status_label = Label.new()
-    status_label.position = Vector2(50, 560)
-    status_label.size = Vector2(485, 80)
+    status_label.position = Vector2(50,560)
+    status_label.size = Vector2(485,80)
     status_label.text = "Онлайн-сервер: подключение...\nТренировочный бой доступен сразу."
     status_label.modulate = Color("#b8d8ee")
     menu.add_child(status_label)
-
     var panel := Panel.new()
-    panel.position = Vector2(600, 145)
-    panel.size = Vector2(610, 500)
+    panel.position = Vector2(600,145)
+    panel.size = Vector2(610,500)
     var style := StyleBoxFlat.new()
     style.bg_color = Color("#071326")
     style.border_color = Color("#164d77")
     style.set_border_width_all(2)
-    style.corner_radius_top_left = 18
-    style.corner_radius_top_right = 18
-    style.corner_radius_bottom_left = 18
-    style.corner_radius_bottom_right = 18
+    style.set_corner_radius_all(18)
     panel.add_theme_stylebox_override("panel", style)
     menu.add_child(panel)
     var map_title := Label.new()
     map_title.text = "АРЕНА READY"
-    map_title.position = Vector2(635, 175)
-    map_title.add_theme_font_size_override("font_size", 30)
+    map_title.position = Vector2(635,175)
+    map_title.add_theme_font_size_override("font_size",30)
     map_title.modulate = Color("#ffffff")
     menu.add_child(map_title)
     var info := Label.new()
-    info.text = "✓ 7 настоящих укрытий\n✓ 2 бойца на карте\n✓ оружие + перезарядка\n✓ попадания и HP\n✓ онлайн комнаты\n✓ управление телефоном\n\nВ этой версии сцена не пустая даже без сервера:\nсразу запускается полноценный бой против второго игрока."
-    info.position = Vector2(635, 225)
-    info.add_theme_font_size_override("font_size", 21)
+    info.text = "✓ 7 настоящих укрытий\n✓ 2 бойца на карте\n✓ оружие + перезарядка\n✓ попадания и HP\n✓ онлайн комнаты\n✓ управление телефоном\n\nСцена сразу запускает полноценный бой против\nвторого игрока, даже если сервер еще подключается."
+    info.position = Vector2(635,225)
+    info.add_theme_font_size_override("font_size",21)
     info.modulate = Color("#bfe8ff")
     menu.add_child(info)
 
-func _input(placeholder: String, value: String, pos: Vector2) -> LineEdit:
+func _make_field(placeholder: String, value: String, pos: Vector2) -> LineEdit:
     var e := LineEdit.new()
     e.position = pos
-    e.size = Vector2(485, 48)
+    e.size = Vector2(485,48)
     e.placeholder_text = placeholder
     e.text = value
-    e.add_theme_font_size_override("font_size", 18)
+    e.add_theme_font_size_override("font_size",18)
     menu.add_child(e)
     return e
 
@@ -595,7 +567,7 @@ func _button(text: String, pos: Vector2, size: Vector2, accent: Color) -> Button
     b.text = text
     b.position = pos
     b.size = size
-    b.add_theme_font_size_override("font_size", 17)
+    b.add_theme_font_size_override("font_size",17)
     b.modulate = accent
     menu.add_child(b)
     return b
@@ -606,70 +578,59 @@ func _build_hud() -> void:
     hud.mouse_filter = Control.MOUSE_FILTER_IGNORE
     hud.visible = false
     add_child(hud)
-
     var top := Panel.new()
-    top.position = Vector2(18, 18)
-    top.size = Vector2(330, 122)
+    top.position = Vector2(18,18)
+    top.size = Vector2(330,122)
     top.mouse_filter = Control.MOUSE_FILTER_IGNORE
     hud.add_child(top)
-
     hp_bar = ProgressBar.new()
-    hp_bar.position = Vector2(32, 32)
-    hp_bar.size = Vector2(290, 24)
+    hp_bar.position = Vector2(32,32)
+    hp_bar.size = Vector2(290,24)
     hp_bar.max_value = 100
     hp_bar.value = 100
     hud.add_child(hp_bar)
-
-    ammo_label = _hud_label("12 / 12", Vector2(32, 64), 28)
-    weapon_label = _hud_label("PISTOL", Vector2(180, 67), 19)
-    score_label = _hud_label("0 : 0", Vector2(570, 20), 34)
+    ammo_label = _hud_label("12 / 12", Vector2(32,64), 28)
+    weapon_label = _hud_label("PISTOL", Vector2(180,67), 19)
+    score_label = _hud_label("0 : 0", Vector2(0,20), 34)
     score_label.set_anchors_preset(Control.PRESET_CENTER_TOP)
-    online_label = _hud_label("● TRAINING", Vector2(32, 100), 15)
-    event_label = _hud_label("БОЙ НАЧАЛСЯ", Vector2(0, 70), 18)
+    online_label = _hud_label("● TRAINING", Vector2(32,100), 15)
+    event_label = _hud_label("БОЙ НАЧАЛСЯ", Vector2(0,70), 18)
     event_label.set_anchors_preset(Control.PRESET_CENTER_TOP)
-
-    crosshair = _hud_label("✦", Vector2(0, 0), 34)
+    crosshair = _hud_label("✦", Vector2(0,0), 34)
     crosshair.set_anchors_preset(Control.PRESET_CENTER)
-    crosshair.modulate = Color("#ffffff")
-
-    fire_button = _hud_button("FIRE", Vector2(-175, -190), Vector2(150, 130), Color("#ff356f"))
+    fire_button = _hud_button("FIRE", Vector2(-175,-190), Vector2(150,130), Color("#ff356f"))
     fire_button.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
-    fire_button.button_down.connect(func(): fire_down = true)
-    fire_button.button_up.connect(func(): fire_down = false)
-
-    reload_button = _hud_button("RELOAD", Vector2(-340, -85), Vector2(145, 58), Color("#42e8ff"))
+    fire_button.button_down.connect(func(): fire_down=true)
+    fire_button.button_up.connect(func(): fire_down=false)
+    reload_button = _hud_button("RELOAD", Vector2(-340,-85), Vector2(145,58), Color("#42e8ff"))
     reload_button.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
     reload_button.pressed.connect(_reload_local)
-
-    weapon_button = _hud_button("WEAPON", Vector2(-185, -85), Vector2(145, 58), Color("#8e79ff"))
+    weapon_button = _hud_button("WEAPON", Vector2(-185,-85), Vector2(145,58), Color("#8e79ff"))
     weapon_button.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
     weapon_button.pressed.connect(_switch_weapon)
-
-    leave_button = _hud_button("MENU", Vector2(-115, 20), Vector2(95, 42), Color("#ffffff"))
+    leave_button = _hud_button("MENU", Vector2(-115,20), Vector2(95,42), Color("#ffffff"))
     leave_button.set_anchors_preset(Control.PRESET_TOP_RIGHT)
     leave_button.pressed.connect(_leave_match)
-
     joystick_base = Panel.new()
-    joystick_base.position = Vector2(48, -190)
-    joystick_base.size = Vector2(155, 155)
+    joystick_base.position = Vector2(48,-190)
+    joystick_base.size = Vector2(155,155)
     joystick_base.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
-    joystick_base.modulate = Color(0.1, 0.7, 1.0, 0.22)
+    joystick_base.modulate = Color(0.1,0.7,1.0,0.22)
     joystick_base.mouse_filter = Control.MOUSE_FILTER_STOP
     hud.add_child(joystick_base)
     joystick_base.gui_input.connect(_joystick_input)
-
     joystick_knob = Panel.new()
-    joystick_knob.size = Vector2(62, 62)
-    joystick_knob.position = Vector2(46, 46)
+    joystick_knob.size = Vector2(62,62)
+    joystick_knob.position = Vector2(46,46)
     joystick_knob.mouse_filter = Control.MOUSE_FILTER_IGNORE
-    joystick_knob.modulate = Color(0.3, 0.9, 1.0, 0.75)
+    joystick_knob.modulate = Color(0.3,0.9,1.0,0.75)
     joystick_base.add_child(joystick_knob)
 
 func _hud_label(text: String, pos: Vector2, size: int) -> Label:
     var l := Label.new()
     l.text = text
     l.position = pos
-    l.add_theme_font_size_override("font_size", size)
+    l.add_theme_font_size_override("font_size",size)
     l.modulate = Color("#eafaff")
     hud.add_child(l)
     return l
@@ -679,7 +640,7 @@ func _hud_button(text: String, pos: Vector2, size: Vector2, c: Color) -> Button:
     b.text = text
     b.position = pos
     b.size = size
-    b.add_theme_font_size_override("font_size", 18)
+    b.add_theme_font_size_override("font_size",18)
     b.modulate = c
     b.mouse_filter = Control.MOUSE_FILTER_STOP
     hud.add_child(b)
@@ -689,7 +650,6 @@ func _joystick_input(e: InputEvent) -> void:
     if e is InputEventScreenTouch:
         if e.pressed:
             joystick_touch = e.index
-            joystick_start = e.position
             _set_joystick(e.position)
         elif e.index == joystick_touch:
             joystick_touch = -1
@@ -701,8 +661,7 @@ func _joystick_input(e: InputEvent) -> void:
 func _set_joystick(pos: Vector2) -> void:
     var center := joystick_base.size / 2.0
     var v := pos - joystick_base.global_position - center
-    if v.length() > 58:
-        v = v.normalized() * 58
+    if v.length() > 58: v = v.normalized() * 58
     joystick_vec = v / 58.0
     joystick_knob.position = center - joystick_knob.size/2.0 + v
 
@@ -722,10 +681,7 @@ func _update_hud() -> void:
     weapon_label.text = local_weapon.to_upper()
     score_label.text = "%d  :  %d" % [local_score, bot_score]
     online_label.text = "● ONLINE" if connected and use_server_state else "● TRAINING"
-    if flash_timer > 0:
-        crosshair.modulate = Color("#fff35c")
-    else:
-        crosshair.modulate = Color("#ffffff")
+    crosshair.modulate = Color("#fff35c") if flash_timer > 0 else Color("#ffffff")
 
 func _setup_network() -> void:
     net = NET_SCRIPT.new()
@@ -750,31 +706,30 @@ func _on_server_failed(reason: String) -> void:
 
 func _on_server_message(data: Dictionary) -> void:
     var t := str(data.get("type", ""))
-    if t in ["snapshot", "state", "game_state"]:
-        var ps = data.get("players", [])
+    if t in ["snapshot","state","game_state"]:
+        var ps = data.get("players",[])
         if ps is Array and ps.size() >= 2:
             server_players = ps
-            server_bullets = data.get("bullets", [])
+            server_bullets = data.get("bullets",[])
             use_server_state = true
             _apply_server_state()
-    elif t in ["room_created", "created", "room_joined", "joined"]:
-        var code := str(data.get("code", data.get("roomCode", "")))
+    elif t in ["room_created","created","room_joined","joined"]:
+        var code := str(data.get("code",data.get("roomCode","")))
         room_code_edit.text = code
         in_match = true
         menu.visible = false
         hud.visible = true
-        event_label.text = "ОНЛАЙН-КОМНАТА СОЗДАНА • КОД %s" % code
+        event_label.text = "ОНЛАЙН-КОМНАТА • КОД %s" % code
     elif t == "rooms":
-        _show_rooms(data.get("rooms", []))
-    elif t in ["error", "room_error"]:
-        status_label.text = str(data.get("message", "Ошибка сервера"))
+        _show_rooms(data.get("rooms",[]))
+    elif t in ["error","room_error"]:
+        status_label.text = str(data.get("message","Ошибка сервера"))
 
 func _apply_server_state() -> void:
-    if server_players.size() < 2:
-        return
+    if server_players.size() < 2: return
     for i in range(2):
         var p: Dictionary = server_players[i]
-        var pos := Vector2(float(p.get("x",0)), float(p.get("y",0)))
+        var pos := Vector2(float(p.get("x",0)),float(p.get("y",0)))
         if i == local_id:
             local_pos = pos
             local_hp = float(p.get("hp",100))
@@ -783,8 +738,8 @@ func _apply_server_state() -> void:
             local_weapon = str(p.get("weapon",local_weapon))
             local_reloading = bool(p.get("reloading",false))
             local_score = int(p.get("score",local_score))
-            var a: Dictionary = p.get("aim", {"x":1,"y":0})
-            aim_angle = atan2(float(a.get("y",0)), float(a.get("x",1)))
+            var a: Dictionary = p.get("aim",{"x":1,"y":0})
+            aim_angle = atan2(float(a.get("y",0)),float(a.get("x",1)))
         else:
             bot_pos = pos
             bot_hp = float(p.get("hp",100))
@@ -792,27 +747,16 @@ func _apply_server_state() -> void:
     _sync_local_visuals()
 
 func _process_network_input(delta: float) -> void:
-    if not connected or not in_match:
-        return
+    if not connected or not in_match: return
     last_server_send -= delta
-    if last_server_send > 0:
-        return
+    if last_server_send > 0: return
     last_server_send = 0.05
     var move := _keyboard_move()
-    if joystick_vec.length() > 0.05:
-        move = joystick_vec
-    net.send_message({
-        "type":"input",
-        "move":{"x":move.x,"y":move.y},
-        "aim":{"x":cos(aim_angle),"y":sin(aim_angle)},
-        "fire":fire_down,
-        "reload":local_reloading,
-        "weapon":local_weapon
-    })
+    if joystick_vec.length() > 0.05: move = joystick_vec
+    net.send_message({"type":"input","move":{"x":move.x,"y":move.y},"aim":{"x":cos(aim_angle),"y":sin(aim_angle)},"fire":fire_down,"reload":local_reloading,"weapon":local_weapon})
 
 func _create_room() -> void:
     if not connected:
-        event_label.text = "СЕРВЕР НЕ ПОДКЛЮЧЕН • ИГРАЕМ В ТРЕНИРОВКЕ"
         _start_local_match()
         return
     net.send_message({"type":"create_room","name":room_name_edit.text,"password":password_edit.text,"nick":nick_edit.text})
@@ -830,12 +774,11 @@ func _refresh_rooms() -> void:
     net.send_message({"type":"rooms"})
 
 func _show_rooms(list: Array) -> void:
-    for c in rooms_box.get_children():
-        c.queue_free()
+    for c in rooms_box.get_children(): c.queue_free()
     for r in list:
         var b := Button.new()
-        b.text = "%s   [%s]   %s" % [str(r.get("name","ROOM")), str(r.get("code","")), str(r.get("players",0))]
-        b.custom_minimum_size = Vector2(520, 48)
+        b.text = "%s   [%s]   %s" % [str(r.get("name","ROOM")),str(r.get("code","")),str(r.get("players",0))]
+        b.custom_minimum_size = Vector2(520,48)
         b.pressed.connect(func(): room_code_edit.text = str(r.get("code","")); _join_room())
         rooms_box.add_child(b)
 
@@ -844,10 +787,3 @@ func _leave_match() -> void:
     use_server_state = false
     menu.visible = true
     hud.visible = false
-
-func _update_menu_animation(delta: float) -> void:
-    if title_exists():
-        pass
-
-func title_exists() -> bool:
-    return menu != null
