@@ -1,9 +1,8 @@
-; NEON ARENA Godot 4 rebuild
-; This branch is a native 3D client prototype. The existing Node.js server remains the online room backend.
+; NEON ARENA Godot 4
 config_version=5
 
 [application]
-config/name="NEON ARENA 3D"
+config/name="NEON ARENA"
 run/main_scene="res://godot/main.tscn"
 config/features=PackedStringArray("4.3", "GL Compatibility")
 
@@ -19,10 +18,5 @@ renderer/rendering_method="gl_compatibility"
 renderer/rendering_method.mobile="gl_compatibility"
 textures/default_filters/use_nearest_mipmap_filter=false
 
-[input]
-move_forward={"deadzone":0.5,"events":[Object(InputEventKey,"physical_keycode":87)]}
-move_back={"deadzone":0.5,"events":[Object(InputEventKey,"physical_keycode":83)]}
-move_left={"deadzone":0.5,"events":[Object(InputEventKey,"physical_keycode":65)]}
-move_right={"deadzone":0.5,"events":[Object(InputEventKey,"physical_keycode":68)]}
-fire={"deadzone":0.5,"events":[Object(InputEventMouseButton,"button_index":1)]}
-reload={"deadzone":0.5,"events":[Object(InputEventKey,"physical_keycode":82)]}
+[display/window]
+handheld/orientation=1
