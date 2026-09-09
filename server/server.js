@@ -2,12 +2,12 @@ const http=require('http');const fs=require('fs');const path=require('path');con
 const PORT=Number(process.env.PORT||8080),COLS=11,ROWS=15,MAX_ROOMS=100,MIN_PLAYERS=2,MAX_PLAYERS=4;
 const SPAWNS=[{x:5,y:1,dx:0,dy:1},{x:1,y:7,dx:1,dy:0},{x:9,y:7,dx:-1,dy:0},{x:5,y:13,dx:0,dy:-1}];
 const rooms=new Map(),alphabet='ABCDEFGHJKLMNPQRSTUVWXYZ23456789';let seq=1;
-function code(){let s;do{s='';for(let i=0;i<6;i++)s+=alphabet[Math.floor(Math.random()*alphabet.length)}while(rooms.has(s));return s}
+function code(){let s;do{s='';for(let i=0;i<6;i++)s+=alphabet[Math.floor(Math.random()*alphabet.length)]}while(rooms.has(s));return s}
 function makeRoom(name,maxPlayers){const n=Math.max(MIN_PLAYERS,Math.min(MAX_PLAYERS,Number(maxPlayers)||4));const r={code:code(),name:name||'Неоновая арена',maxPlayers:n,players:Array(n).fill(null),segments:[],running:false,target:{x:5,y:7},scores:Array(n).fill(0),host:0,turn:0};rooms.set(r.code,r);return r}
 function send(ws,o){if(ws&&ws.readyState===1)ws.send(JSON.stringify(o))}function broadcast(r,o){r.players.forEach(p=>send(p?.ws,o))}
 function lobby(r){return{type:'lobby',room:r.code,roomName:r.name,maxPlayers:r.maxPlayers,host:r.host,players:r.players.map((p,i)=>p?{id:i,name:p.name,host:i===r.host}:null)}}
 function pubPlayers(r){return r.players.map(p=>p?{x:p.x,y:p.y,dir:p.dir,score:p.score,name:p.name,alive:p.alive}:null)}
-function snapshot(r){return{type:'snapshot',players:pubPlayers(r),segments:r.segments.slice(-800),target:r.target,turn:r.turn}}
+function snapshot(r){return{type:'snapshot',running:r.running,players:pubPlayers(r),segments:r.segments.slice(-800),target:r.target,turn:r.turn}}
 function nextTurn(r,from){for(let k=1;k<=r.players.length;k++){const i=(from+k)%r.players.length;if(r.players[i]&&r.players[i].alive){r.turn=i;return}}r.turn=-1}
 function start(r){r.segments=[];r.running=true;r.turn=0;for(let i=0;i<r.players.length;i++){const p=r.players[i];if(!p)continue;const s=SPAWNS[i];p.x=s.x;p.y=s.y;p.dir={x:s.dx,y:s.dy};p.nextDir={x:s.dx,y:s.dy};p.alive=true;p.path=[{x:p.x,y:p.y}]}nextTurn(r,r.players.length-1);broadcast(r,{type:'start',room:r.code,playerCount:r.players.filter(Boolean).length,player:r.players.findIndex(p=>p&&p.ws===r.players[r.turn]?.ws),turn:r.turn,players:r.players.map((p,i)=>p?{id:i,name:p.name,host:i===r.host}:null)});broadcast(r,snapshot(r))}
 function occupied(r,x,y,ignore){return r.players.some((p,i)=>p&&i!==ignore&&p.alive&&p.x===x&&p.y===y)||r.segments.some(s=>s.b.x===x&&s.b.y===y)}
