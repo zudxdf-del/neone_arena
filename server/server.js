@@ -1,9 +1,8 @@
 const http=require('http'),fs=require('fs'),path=require('path'),{WebSocketServer}=require('ws');
 const PORT=Number(process.env.PORT||8080),COLS=17,ROWS=17,MIN=2,MAX=4,SP=[{x:8,y:1,dx:0,dy:1},{x:1,y:8,dx:1,dy:0},{x:15,y:8,dx:-1,dy:0},{x:8,y:15,dx:0,dy:-1}],alphabet='ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 const rooms=new Map();let seq=1;
-const send=(w,o)=>w?.readyState===1&&w.send(JSON.stringify(o));
-const bc=(r,o)=>r.players.forEach(p=>send(p?.ws,o));
-function code(){let s;do{s='';for(let i=0;i<6;i++)s+=alphabet[Math.floor(Math.random()*alphabet.length)}while(rooms.has(s));return s}
+const send=(w,o)=>w?.readyState===1&&w.send(JSON.stringify(o));const bc=(r,o)=>r.players.forEach(p=>send(p?.ws,o));
+function code(){let s;do{s='';for(let i=0;i<6;i++)s+=alphabet[Math.floor(Math.random()*alphabet.length)];}while(rooms.has(s));return s}
 function makeRoom(name,n){n=Math.max(MIN,Math.min(MAX,Number(n)||4));const r={code:code(),name:name||'Неоновая арена',maxPlayers:n,mode:n===2?'duel':'center',players:Array(n).fill(null),segments:[],walls:[],running:false,turn:0,scores:Array(n).fill(0),host:0,target:{x:8,y:8}};rooms.set(r.code,r);return r}
 function lobby(r){return{type:'lobby',room:r.code,roomName:r.name,maxPlayers:r.maxPlayers,mode:r.mode,host:r.host,players:r.players.map((p,i)=>p?{id:i,name:p.name,host:i===r.host}:null)}}
 function pub(r){return r.players.map(p=>p?{x:p.x,y:p.y,dir:p.dir,score:p.score,name:p.name,alive:p.alive}:null)}
