@@ -1,12 +1,8 @@
 {
-  "name": "neon-arena",
-  "version": "1.0.0",
-  "private": true,
-  "description": "NEON ARENA multiplayer server",
-  "scripts": {
-    "start": "node server/server.js"
-  },
-  "dependencies": {
-    "ws": "^8.18.3"
-  }
+  "name":"tochny-udar",
+  "version":"1.0.0",
+  "private":true,
+  "description":"Точный удар — простая онлайн-игра для двух игроков",
+  "scripts":{"start":"node strike-server.js"},
+  "dependencies":{"ws":"^8.18.3"}
 }
