@@ -2,7 +2,7 @@
   "name":"tochny-udar",
   "version":"1.0.0",
   "private":true,
-  "description":"Точный удар — простая онлайн-игра для двух игроков",
+  "description":"Криминальный Сапёр — онлайн-игра для двух хакеров",
   "scripts":{"start":"node strike-server.js"},
-  "dependencies":{"ws":"^8.18.3"}
+  "dependencies":{"express":"^5.1.0","ws":"^8.18.3"}
 }
