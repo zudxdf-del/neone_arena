@@ -1,6 +1,6 @@
 {
   "$schema": "https://layero.ru/schema/layero-v2.json",
   "installCommand": "npm install",
-  "startCommand": "npm start",
+  "startCommand": "node strike-server.js",
   "nodeVersion": "22"
 }
