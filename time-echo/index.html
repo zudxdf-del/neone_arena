@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Эхо Времени — State Sync</title>
+<style>
+:root{font-family:Inter,system-ui,-apple-system,Segoe UI,sans-serif;color:#eef2ff;background:#080b16}*{box-sizing:border-box}body{margin:0;min-height:100vh;background:radial-gradient(circle at 50% 0,#1c2850 0,#080b16 55%);display:flex;justify-content:center}main{width:min(980px,100%);padding:18px}.panel{background:rgba(13,18,35,.92);border:1px solid #2c385c;border-radius:18px;padding:18px;box-shadow:0 18px 50px #0008}h1{margin:0 0 4px;font-size:28px}p{color:#aeb8d8}.row{display:flex;gap:10px;flex-wrap:wrap}.field{flex:1;min-width:170px}input,button{width:100%;border:1px solid #36446f;border-radius:12px;padding:12px;background:#11182d;color:#fff;font-size:16px}button{cursor:pointer;background:#202d54}button:disabled{opacity:.45;cursor:not-allowed}.actions{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px}.room{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:14px}.card{border:1px solid #2c385c;border-radius:14px;padding:12px;background:#0c1224}.code{font-size:30px;font-weight:800;letter-spacing:8px}.status{margin-top:12px;padding:10px;border-radius:10px;background:#0a1020;color:#b9c7ee}.game{margin-top:14px;display:grid;grid-template-columns:minmax(0,1fr) 250px;gap:14px}.canvasWrap{position:relative;border:1px solid #2c385c;border-radius:16px;overflow:hidden;background:#070a13}canvas{display:block;width:100%;height:auto;aspect-ratio:4/3}.side{display:flex;flex-direction:column;gap:10px}.small{font-size:13px;color:#8794bb}.object{padding:10px;border-radius:10px;background:#11182d;border:1px solid #29375e}.mono{font-family:ui-monospace,SFMono-Regular,monospace}.hidden{display:none}@media(max-width:760px){.game{grid-template-columns:1fr}.room{grid-template-columns:1fr}.actions{grid-template-columns:1fr 1fr}}
+</style>
+</head>
+<body>
+<main>
+<section class="panel">
+<h1>Эхо Времени</h1>
+<p>Шаг 1 — серверная синхронизация состояния, комнаты и компенсация задержки.</p>
+<div class="row">
+<div class="field"><input id="name" maxlength="18" placeholder="Имя игрока"></div>
+<div class="field"><input id="room" inputmode="numeric" maxlength="4" placeholder="Код комнаты"></div>
+</div>
+<div class="actions">
+<button id="create">Создать комнату</button>
+<button id="join">Войти в комнату</button>
+</div>
+<div id="status" class="status">Подключение к серверу…</div>
+<div class="room">
+<div class="card"><div class="small">Комната</div><div id="roomCode" class="code">----</div></div>
+<div class="card"><div class="small">Роль</div><div id="role">—</div><div id="players" class="small">Игроков: 0/2</div></div>
+</div>
+<div id="game" class="game hidden">
+<div class="canvasWrap"><canvas id="canvas" width="800" height="600"></canvas></div>
+<div class="side">
+<div class="card"><b>Сетевое состояние</b><div id="net" class="small">Нет снапшота</div></div>
+<div class="card"><b>Эффект бабочки</b><div class="object">🌱 <span id="seedState">seed_planted</span></div><div class="object">🌉 <span id="bridgeState">bridge_intact</span></div><div class="object">📦 <span id="capsuleState">empty</span></div></div>
+<button id="tree">Сменить саженец → дерево</button>
+<button id="bridge">Сломать мост</button>
+<button id="capsule">Положить предмет в капсулу</button>
+<div class="small">Управление для теста синхронизации: WASD или стрелки. Движение локально предсказывается, удалённый игрок интерполируется.</div>
+</div>
+</div>
+</section>
+</main>
+<script src="/time-echo/client.js"></script>
+</body>
+</html>
