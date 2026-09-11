@@ -1,10 +1,10 @@
 {
-  "name": "criminal-mines",
+  "name": "time-echo",
   "version": "1.0.0",
   "private": true,
-  "description": "Криминальный Сапёр — онлайн-игра для двух хакеров",
+  "description": "Эхо Времени — мультиплеерная 2D-игра с синхронизацией состояния",
   "scripts": {
-    "start": "node strike-server.js"
+    "start": "node time-echo/server.js"
   },
   "engines": {
     "node": ">=22"
