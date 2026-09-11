@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Криминальный Сапёр</title>
+<style>
+*{box-sizing:border-box}html,body{margin:0;min-height:100%;background:#050807;color:#d8ffe1;font-family:system-ui,-apple-system,Segoe UI,sans-serif}body{overflow-x:hidden}
+body:before{content:"01001011 01010010 01001001 01001101 01001001 01001110 01000001 01001100  //  ACCESS_GRANTED  //  01100101 01111000 01110000 01101100 01101111 01101001 01110100";position:fixed;inset:0;opacity:.045;color:#35ff75;font:14px/2 monospace;word-break:break-all;pointer-events:none;z-index:0}
+.wrap{position:relative;z-index:1;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px}.panel{width:min(520px,100%);background:rgba(7,14,10,.94);border:1px solid #174c29;border-radius:22px;padding:28px;box-shadow:0 0 45px rgba(0,255,90,.09),inset 0 0 25px rgba(0,255,90,.025)}
+.logo{font:800 13px monospace;letter-spacing:3px;color:#42ff7b;text-align:center}.title{text-align:center;font-size:34px;line-height:1.1;margin:10px 0 8px;color:#ecfff0;text-shadow:0 0 18px rgba(50,255,110,.25)}.sub{text-align:center;color:#789584;margin:0 0 25px;font-size:14px}.status{text-align:center;font:13px monospace;color:#4cff82;min-height:20px;margin-top:16px}.grid{display:grid;gap:12px}.box{border:1px solid #173a23;border-radius:16px;padding:16px;background:#09110c}.box h2{font-size:15px;margin:0 0 12px;color:#a9ffbd}.row{display:flex;gap:10px}input{width:100%;background:#050a07;border:1px solid #235b34;border-radius:12px;color:#eaffee;padding:14px;font-size:16px;outline:none}input:focus{border-color:#43ff7a;box-shadow:0 0 0 3px rgba(67,255,122,.08)}button{border:1px solid #2ecb5f;background:#0b2413;color:#baffca;border-radius:12px;padding:13px 16px;font-weight:700;font-size:15px;cursor:pointer;min-height:48px}button.primary{width:100%;background:#19a84b;color:#031107;border-color:#3cff76;box-shadow:0 0 18px rgba(25,168,75,.2)}button:active{transform:translateY(1px)}button:disabled{opacity:.45;cursor:default}.room{display:none;text-align:center}.code{font:900 48px monospace;letter-spacing:8px;color:#54ff89;margin:14px 0;text-shadow:0 0 22px rgba(84,255,137,.3)}.hint{color:#718c78;font-size:13px}.players{display:flex;gap:10px;margin-top:18px}.player{flex:1;border:1px solid #174c29;border-radius:12px;padding:14px;text-align:center;background:#071009}.online{color:#51ff86;font-size:12px;margin-top:5px}.message{margin-top:20px;border-radius:13px;padding:15px;background:#07170c;border:1px solid #1b6532;color:#8dffab;font-family:monospace;font-size:14px}.error{color:#ff6f6f;border-color:#632525;background:#180909}.back{margin-top:14px;width:100%;background:transparent}.footer{text-align:center;margin-top:18px;color:#42594a;font:11px monospace}
+@media(max-width:430px){.panel{padding:20px}.title{font-size:29px}.code{font-size:40px;letter-spacing:5px}}
+</style></head>
+<body><main class="wrap"><section class="panel">
+<div class="logo">// SECURE_NETWORK //</div><h1 class="title">КРИМИНАЛЬНЫЙ САПЁР</h1><p class="sub">Онлайн-лобби для двух хакеров</p>
+<div id="lobby" class="grid"><div class="box"><h2>Идентификатор хакера</h2><input id="nick" maxlength="18" placeholder="Например: Игрок 1"></div>
+<div class="box"><h2>Новая секретная сессия</h2><button id="create" class="primary">Создать секретную сессию</button></div>
+<div class="box"><h2>Подключиться к сессии</h2><div class="row"><input id="roomInput" inputmode="numeric" maxlength="4" placeholder="4-значный код"><button id="join">Войти</button></div></div></div>
+<div id="room" class="room"><div class="hint">СЕКРЕТНАЯ КОМНАТА</div><div id="code" class="code">----</div><div class="hint">Передай этот код второму игроку</div><div class="players"><div class="player"><b>Хакер 1</b><div id="p1" class="online">ожидание...</div></div><div class="player"><b>Хакер 2</b><div id="p2" class="online">ожидание...</div></div></div><div id="message" class="message">Сессия создана. Ждём второго хакера...</div><button id="back" class="back">Выйти из комнаты</button></div>
+<div id="status" class="status">● соединение с сетью...</div><div class="footer">NO GAMEPLAY YET // NETWORK TEST BUILD</div></section></main>
+<script>
+const $=id=>document.getElementById(id);let ws=null,role=-1,roomCode='';
+function status(t,err=false){$('status').textContent=t;$('status').style.color=err?'#ff7070':'#4cff82'}
+function connect(){ws=new WebSocket((location.protocol==='https:'?'wss://':'ws://')+location.host);ws.onopen=()=>status('● сеть подключена');ws.onclose=()=>status('● соединение потеряно',true);ws.onerror=()=>status('● ошибка сети',true);ws.onmessage=e=>{let m;try{m=JSON.parse(e.data)}catch{return}
+ if(m.type==='created'){role=0} if(m.type==='joined'){role=1} if(m.type==='waiting'){showRoom();$('message').textContent='Сессия создана. Ждём второго хакера...';$('p1').textContent='В сети';$('p2').textContent='ожидание...'}
+ if(m.type==='room'){roomCode=m.room;$('code').textContent=roomCode;showRoom()}
+ if(m.type==='ready'){ $('p1').textContent='В сети';$('p2').textContent='В сети';$('message').textContent='Оба хакера в сети. Подготовка сети...';status('● оба игрока синхронизированы') }
+ if(m.type==='error'){status('● '+m.message,true);$('message').textContent=m.message;$('message').className='message error'}
+ }}
+function showRoom(){$('lobby').style.display='none';$('room').style.display='block'}
+function send(x){if(ws&&ws.readyState===1)ws.send(JSON.stringify(x));else status('● сеть ещё подключается',true)}
+$('create').onclick=()=>{let nick=$('nick').value.trim()||'Игрок 1';send({type:'create',nick})};
+$('join').onclick=()=>{let c=$('roomInput').value.replace(/\D/g,'');if(c.length!==4)return status('● введи 4-значный код',true);let nick=$('nick').value.trim()||'Игрок 2';send({type:'join',room:c,nick})};
+$('roomInput').oninput=e=>e.target.value=e.target.value.replace(/\D/g,'').slice(0,4);
+$('back').onclick=()=>location.reload();connect();
+</script></body></html>
