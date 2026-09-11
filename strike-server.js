@@ -12,8 +12,8 @@ const wss=new WebSocketServer({server});
 wss.on('connection',ws=>{let r=null,i=-1;
 ws.on('message',b=>{let m;try{m=JSON.parse(b)}catch{return}
 if(m.type==='servers'){send(ws,{type:'servers',servers:publicRooms()});return}
-if(m.type==='create'){r={code:code(),p:[null,null]};i=0;r.p[0]={ws,name:String(m.nick||'Игрок 1').slice(0,18)};rooms.set(r.code,r);send(ws,{type:'created',player:0});send(ws,{type:'room',room:r.code,role:0});send(ws,{type:'waiting'});return}
-if(m.type==='join'){r=rooms.get(String(m.room||''));if(!r)return send(ws,{type:'error',message:'Комната не найдена. Проверь код.'});if(r.p[1])return send(ws,{type:'error',message:'Комната уже заполнена.'});i=1;r.p[1]={ws,name:String(m.nick||'Игрок 2').slice(0,18)};send(ws,{type:'room',room:r.code,role:1});broadcast(r,{type:'ready',names:r.p.map(p=>p.name)});return}
+if(m.type==='create'){r={code:code(),seed:(Math.floor(Math.random()*0xffffffff)>>>0),p:[null,null]};i=0;r.p[0]={ws,name:String(m.nick||'Игрок 1').slice(0,18)};rooms.set(r.code,r);send(ws,{type:'created',player:0});send(ws,{type:'room',room:r.code,role:0,seed:r.seed});send(ws,{type:'waiting'});return}
+if(m.type==='join'){r=rooms.get(String(m.room||''));if(!r)return send(ws,{type:'error',message:'Комната не найдена. Проверь код.'});if(r.p[1])return send(ws,{type:'error',message:'Комната уже заполнена.'});i=1;r.p[1]={ws,name:String(m.nick||'Игрок 2').slice(0,18)};send(ws,{type:'room',room:r.code,role:1,seed:r.seed});broadcast(r,{type:'ready',names:r.p.map(p=>p.name),seed:r.seed});return}
 });
 ws.on('close',()=>{if(r&&i>=0){r.p[i]=null;if(!r.p[0]&&!r.p[1])rooms.delete(r.code);else broadcast(r,{type:'left'})}})});
 server.listen(PORT,'0.0.0.0',()=>console.log('Криминальный Сапёр on '+PORT));
