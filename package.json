@@ -4,5 +4,5 @@
   "private":true,
   "description":"Криминальный Сапёр — онлайн-игра для двух хакеров",
   "scripts":{"start":"node strike-server.js"},
-  "dependencies":{"express":"^5.1.0","ws":"^8.18.3"}
+  "dependencies":{"ws":"^8.18.3"}
 }
