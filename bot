@@ -1,332 +1,494 @@
 const mineflayer = require('mineflayer')
 const { pathfinder, Movements, goals } = require('mineflayer-pathfinder')
+const minecraftData = require('minecraft-data')
+const Vec3 = require('vec3')
 const fs = require('fs')
 
-let mcData;
-const MEMORY_FILE = './memory.json'
-
-function loadMemory() {
-  try {
-    if (fs.existsSync(MEMORY_FILE)) return JSON.parse(fs.readFileSync(MEMORY_FILE, 'utf8'))
-  } catch (e) { console.error(e) }
-  return { players: {}, locations: {}, facts: [] }
+const CONFIG = {
+  host: process.env.MC_HOST || 'funvanillaworld.aternos.me',
+  port: Number(process.env.MC_PORT || 57004),
+  username: process.env.MC_USERNAME || 'Bot_Vanilla',
+  version: process.env.MC_VERSION || '1.21.11',
+  ollamaUrl: process.env.OLLAMA_URL || 'http://127.0.0.1:11434/api/generate',
+  ollamaModel: process.env.OLLAMA_MODEL || 'llama3',
+  memoryFile: process.env.MEMORY_FILE || './memory.json'
 }
 
-async function askOllama(promptText) {
-  const response = await fetch('http://127.0.0.1:11434/api/generate', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ model: 'llama3', prompt: promptText, stream: false })
-  })
-  const data = await response.json()
-  if (!data || !data.response) throw new Error('Пустой ответ Олламы')
-  
-  let rawJson = data.response.trim()
-  const start = rawJson.indexOf('{')
-  const end = rawJson.lastIndexOf('}')
-  if (start !== -1 && end !== -1) rawJson = rawJson.substring(start, end + 1)
-  return JSON.parse(rawJson)
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
+
+class Memory {
+  constructor(file) {
+    this.file = file
+    this.data = this.load()
+  }
+
+  load() {
+    try {
+      if (fs.existsSync(this.file)) return JSON.parse(fs.readFileSync(this.file, 'utf8'))
+    } catch (error) {
+      console.error('[MEMORY]', error.message)
+    }
+    return { players: {}, locations: {}, discoveries: [], facts: [], history: [] }
+  }
+
+  save() {
+    try {
+      fs.writeFileSync(this.file, JSON.stringify(this.data, null, 2))
+    } catch (error) {
+      console.error('[MEMORY SAVE]', error.message)
+    }
+  }
+
+  rememberPlayer(name, patch = {}) {
+    const old = this.data.players[name] || { name, interactions: 0 }
+    this.data.players[name] = { ...old, ...patch, interactions: (old.interactions || 0) + 1, lastSeen: Date.now() }
+    this.save()
+  }
+
+  rememberLocation(name, position, note = '') {
+    this.data.locations[name] = {
+      name,
+      x: Math.round(position.x),
+      y: Math.round(position.y),
+      z: Math.round(position.z),
+      note,
+      updatedAt: Date.now()
+    }
+    this.save()
+  }
+
+  addDiscovery(text) {
+    if (!text) return
+    this.data.discoveries.push({ text, at: Date.now() })
+    this.data.discoveries = this.data.discoveries.slice(-100)
+    this.save()
+  }
+
+  addHistory(entry) {
+    this.data.history.push({ ...entry, at: Date.now() })
+    this.data.history = this.data.history.slice(-80)
+    this.save()
+  }
 }
 
-function createBotInstance() {
-  console.log('🔌 Подключение к серверу Aternos...');
-  
+class WorldObserver {
+  constructor(bot) {
+    this.bot = bot
+  }
+
+  nearbyEntities(radius = 16) {
+    return Object.values(this.bot.entities)
+      .filter(e => e && e.position && e !== this.bot.entity)
+      .map(e => ({
+        name: e.username || e.name || e.type,
+        type: e.type,
+        distance: Number(e.position.distanceTo(this.bot.entity.position).toFixed(1)),
+        x: Math.round(e.position.x),
+        y: Math.round(e.position.y),
+        z: Math.round(e.position.z)
+      }))
+      .filter(e => e.distance <= radius)
+      .sort((a, b) => a.distance - b.distance)
+      .slice(0, 25)
+  }
+
+  players() {
+    return Object.values(this.bot.players)
+      .filter(p => p.username)
+      .map(p => ({ name: p.username, online: Boolean(p.entity) }))
+  }
+
+  snapshot() {
+    const p = this.bot.entity?.position
+    return {
+      self: p ? { x: Math.round(p.x), y: Math.round(p.y), z: Math.round(p.z) } : null,
+      health: this.bot.health,
+      food: this.bot.food,
+      time: this.bot.time?.time,
+      isDay: this.bot.time?.isDay,
+      dimension: this.bot.game?.dimension,
+      inventory: this.bot.inventory.items().map(i => ({ name: i.name, count: i.count })).slice(0, 40),
+      players: this.players(),
+      nearby: this.nearbyEntities(20)
+    }
+  }
+
+  danger() {
+    const hostile = ['zombie', 'skeleton', 'creeper', 'spider', 'drowned', 'husk', 'stray', 'witch', 'pillager', 'vindicator']
+    return Object.values(this.bot.entities)
+      .filter(e => e && e.position && e.type === 'mob' && hostile.includes(e.name))
+      .map(e => ({ entity: e, distance: e.position.distanceTo(this.bot.entity.position) }))
+      .filter(x => x.distance <= 12)
+      .sort((a, b) => a.distance - b.distance)[0] || null
+  }
+}
+
+class Agent {
+  constructor(bot) {
+    this.bot = bot
+    this.memory = new Memory(CONFIG.memoryFile)
+    this.world = new WorldObserver(bot)
+    this.task = null
+    this.taskId = 0
+    this.busy = false
+    this.followTarget = null
+    this.lastAutonomousAction = 0
+    this.lastDangerMessage = 0
+  }
+
+  async think(message, username) {
+    const snapshot = this.world.snapshot()
+    const remembered = this.memory.data.players[username] || {}
+    const recent = this.memory.data.history.slice(-8)
+    const prompt = `Ты управляешь Minecraft AI-агентом Bot_Vanilla. Агент живёт в мире, видит состояние мира и может выполнять только безопасные структурированные действия. Он не должен придумывать, что действие выполнено: результат проверяется после действия.
+
+Состояние мира:
+${JSON.stringify(snapshot)}
+
+Память об игроке:
+${JSON.stringify(remembered)}
+
+Последние события:
+${JSON.stringify(recent)}
+
+Сообщение игрока ${username}: ${message}
+
+Выбери план. Допустимые actions: chat, follow, stop, jump, mine, explore, go_to_player, remember, inspect, none.
+Для mine укажи target и count. Для remember укажи key и value. Для chat укажи text. Для других actions параметры не нужны.
+Если команда неоднозначна, задай уточняющий вопрос через chat.
+Верни строго JSON без markdown:
+{"actions":[{"type":"chat|follow|stop|jump|mine|explore|go_to_player|remember|inspect|none","target":"","count":0,"key":"","value":"","text":""}]}`
+
+    try {
+      const response = await fetch(CONFIG.ollamaUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: CONFIG.ollamaModel, prompt, stream: false, format: 'json' })
+      })
+      if (!response.ok) throw new Error(`Ollama HTTP ${response.status}`)
+      const data = await response.json()
+      let raw = String(data.response || '').trim()
+      const start = raw.indexOf('{')
+      const end = raw.lastIndexOf('}')
+      if (start >= 0 && end > start) raw = raw.slice(start, end + 1)
+      const plan = JSON.parse(raw)
+      return Array.isArray(plan.actions) ? plan.actions.slice(0, 4) : []
+    } catch (error) {
+      console.error('[AI]', error.message)
+      return this.fallback(message, username)
+    }
+  }
+
+  fallback(message, username) {
+    const m = message.toLowerCase()
+    if (m.includes('стой') || m.includes('останов')) return [{ type: 'stop' }]
+    if (m.includes('ко мне') || m.includes('иди сюда') || m.includes('за мной')) return [{ type: 'go_to_player' }]
+    if (m.includes('прыг')) return [{ type: 'jump' }]
+    const match = m.match(/(?:добудь|накопай|собери|сруби|добудь).*?(\d+)?\s*(камн|булыж|дерев|бревн|угл|желез)/i)
+    if (match) {
+      const count = Number(match[1] || 10)
+      const map = { 'камн': 'stone', 'булыж': 'cobblestone', 'дерев': 'log', 'бревн': 'log', 'угл': 'coal_ore', 'желез': 'iron_ore' }
+      const key = Object.keys(map).find(k => match[2].includes(k))
+      return [{ type: 'mine', target: map[key] || 'stone', count }]
+    }
+    if (m.includes('исслед') || m.includes('развед')) return [{ type: 'explore' }]
+    return [{ type: 'chat', text: `Я тебя слышу, ${username}. Скажи, что сделать: следовать, остановиться, исследовать мир или что-нибудь добыть.` }]
+  }
+
+  cancel(reason = '') {
+    this.taskId++
+    this.task = null
+    this.bot.pathfinder.setGoal(null)
+    if (reason) this.say(reason)
+  }
+
+  say(text) {
+    if (!text) return
+    const clean = String(text).replace(/\s+/g, ' ').trim().slice(0, 220)
+    if (clean) this.bot.chat(clean)
+  }
+
+  async execute(actions, username) {
+    for (const action of actions) {
+      if (!action || !action.type) continue
+      if (action.type === 'chat') this.say(action.text)
+      else if (action.type === 'stop') this.cancel('Остановился. Я готов к следующей задаче.')
+      else if (action.type === 'jump') {
+        this.bot.setControlState('jump', true)
+        await sleep(180)
+        this.bot.setControlState('jump', false)
+      } else if (action.type === 'follow' || action.type === 'go_to_player') {
+        await this.goToPlayer(username, true)
+      } else if (action.type === 'mine') {
+        await this.mine(String(action.target || 'stone'), Math.min(64, Math.max(1, Number(action.count) || 1)), username)
+      } else if (action.type === 'explore') {
+        await this.explore(username)
+      } else if (action.type === 'remember') {
+        this.memory.addDiscovery(`${action.key || 'fact'}: ${action.value || ''}`)
+        this.say('Запомнил.')
+      } else if (action.type === 'inspect') {
+        this.reportWorld(username)
+      }
+    }
+  }
+
+  async goToPlayer(username, follow = true) {
+    const player = this.bot.players[username]?.entity
+    if (!player) {
+      this.say(`Я пока не вижу тебя, ${username}.`)
+      return
+    }
+    this.cancel()
+    this.followTarget = username
+    this.bot.pathfinder.setGoal(new goals.GoalFollow(player, 2), follow)
+    this.memory.rememberPlayer(username, { lastPosition: { x: Math.round(player.position.x), y: Math.round(player.position.y), z: Math.round(player.position.z) } })
+    this.say('Иду к тебе.')
+  }
+
+  findBlock(target, radius = 32) {
+    const aliases = {
+      log: ['oak_log', 'birch_log', 'spruce_log', 'jungle_log', 'acacia_log', 'dark_oak_log', 'mangrove_log', 'cherry_log'],
+      flower: ['dandelion', 'poppy', 'blue_orchid', 'allium', 'azure_bluet', 'cornflower', 'oxeye_daisy']
+    }
+    const names = aliases[target] || [target]
+    return this.bot.findBlock({
+      maxDistance: radius,
+      matching: block => block && (names.includes(block.name) || names.some(n => block.name === n || block.name.includes(n)))
+    })
+  }
+
+  async moveNear(position, timeout = 18000) {
+    const id = ++this.taskId
+    this.bot.pathfinder.setGoal(new goals.GoalNear(position.x, position.y, position.z, 3))
+    const started = Date.now()
+    while (Date.now() - started < timeout) {
+      if (id !== this.taskId) return false
+      if (this.bot.entity.position.distanceTo(position) <= 4.2) {
+        this.bot.pathfinder.setGoal(null)
+        return true
+      }
+      if (this.world.danger()) await this.defend()
+      await sleep(250)
+    }
+    this.bot.pathfinder.setGoal(null)
+    return false
+  }
+
+  async mine(target, count, username) {
+    if (this.busy) {
+      this.say('У меня уже есть задача. Скажи «остановись», чтобы отменить её.')
+      return
+    }
+    this.busy = true
+    const id = ++this.taskId
+    let mined = 0
+    this.task = { type: 'mine', target, count, startedAt: Date.now(), owner: username }
+    this.say(`Принял задачу: добыть ${count} ${target}. Сначала проверю мир и инструменты.`)
+
+    try {
+      while (mined < count && id === this.taskId) {
+        const danger = this.world.danger()
+        if (danger) await this.defend()
+        if (id !== this.taskId) break
+
+        const block = this.findBlock(target, 32)
+        if (!block) {
+          this.say(`В радиусе 32 блоков я не вижу ${target}. Попробую исследовать окрестность.`)
+          await this.explore(username, true)
+          const retry = this.findBlock(target, 32)
+          if (!retry) {
+            this.say(`Пока не нашёл ${target}. Задачу не считаю выполненной.`)
+            break
+          }
+        }
+
+        const current = this.findBlock(target, 32)
+        if (!current) break
+        const before = this.inventoryCountMatching(target)
+        const reached = await this.moveNear(current.position)
+        if (!reached || id !== this.taskId) continue
+
+        try {
+          await this.bot.lookAt(current.position.offset(0.5, 0.5, 0.5))
+          await this.equipBestTool(current.name)
+          await this.bot.dig(current, true)
+          await sleep(250)
+          const after = this.inventoryCountMatching(target)
+          mined += Math.max(1, after - before)
+        } catch (error) {
+          console.error('[MINE]', error.message)
+          await sleep(500)
+        }
+      }
+
+      if (mined > 0) this.say(`Готово: подтверждённо добыл примерно ${mined} блоков ${target}.`)
+      else if (id === this.taskId) this.say('Не удалось добыть ни одного блока. Я не буду притворяться, что задача выполнена.')
+    } finally {
+      if (id === this.taskId) this.task = null
+      this.busy = false
+    }
+  }
+
+  inventoryCountMatching(target) {
+    const aliases = target === 'log' ? ['_log'] : [target]
+    return this.bot.inventory.items().filter(i => aliases.some(a => i.name.includes(a))).reduce((n, i) => n + i.count, 0)
+  }
+
+  async equipBestTool(blockName) {
+    const need = blockName.includes('log') || blockName.includes('wood') ? 'axe' :
+      blockName.includes('dirt') || blockName.includes('grass') || blockName.includes('sand') ? 'shovel' :
+      blockName.includes('ore') || ['stone', 'cobblestone', 'deepslate'].includes(blockName) ? 'pickaxe' : null
+    if (!need) return
+    const tools = this.bot.inventory.items().filter(i => i.name.includes(need))
+    if (!tools.length) return
+    const rank = item => item.name.startsWith('netherite') ? 5 : item.name.startsWith('diamond') ? 4 : item.name.startsWith('iron') ? 3 : item.name.startsWith('stone') ? 2 : 1
+    tools.sort((a, b) => rank(b) - rank(a))
+    await this.bot.equip(tools[0], 'hand')
+  }
+
+  async defend() {
+    const danger = this.world.danger()
+    if (!danger || !danger.entity?.valid) return false
+    if (Date.now() - this.lastDangerMessage > 8000) {
+      this.say(`Вижу угрозу: ${danger.entity.name}. Сначала обезопашу себя.`)
+      this.lastDangerMessage = Date.now()
+    }
+    this.bot.pathfinder.setGoal(null)
+    const weapon = this.bot.inventory.items().find(i => i.name.includes('sword') || i.name.includes('axe'))
+    if (weapon) await this.bot.equip(weapon, 'hand').catch(() => {})
+    const until = Date.now() + 7000
+    while (danger.entity.valid && Date.now() < until) {
+      const d = this.bot.entity.position.distanceTo(danger.entity.position)
+      if (d > 4.5) break
+      await this.bot.lookAt(danger.entity.position.offset(0, 1, 0)).catch(() => {})
+      this.bot.attack(danger.entity)
+      await sleep(650)
+    }
+    return true
+  }
+
+  async explore(username, quiet = false) {
+    if (this.busy && !quiet) {
+      this.say('Сначала закончу текущую задачу.')
+      return
+    }
+    const id = ++this.taskId
+    if (!quiet) this.busy = true
+    try {
+      const origin = this.bot.entity.position.clone()
+      const angle = Math.random() * Math.PI * 2
+      const distance = 25 + Math.random() * 35
+      const target = origin.offset(Math.cos(angle) * distance, 0, Math.sin(angle) * distance)
+      if (!quiet) this.say('Исследую ближайшую территорию и запоминаю полезные места.')
+      const ok = await this.moveNear(target, 22000)
+      if (ok && id === this.taskId) {
+        const p = this.bot.entity.position
+        this.memory.rememberLocation(`explore_${Math.floor(Date.now() / 10000)}`, p, `Исследовано рядом с ${username}`)
+        this.memory.addDiscovery(`Исследован район около ${Math.round(p.x)}, ${Math.round(p.y)}, ${Math.round(p.z)}`)
+        if (!quiet) this.say('Исследование завершено. Координаты сохранил в памяти.')
+      }
+    } finally {
+      if (!quiet) this.busy = false
+    }
+  }
+
+  reportWorld(username) {
+    const s = this.world.snapshot()
+    const nearbyPlayers = s.players.filter(p => p.online).map(p => p.name).join(', ') || 'никого'
+    const nearbyMobs = s.nearby.filter(e => e.type === 'mob').slice(0, 5).map(e => `${e.name} ${e.distance}м`).join(', ') || 'опасных мобов не вижу'
+    this.say(`${username}, я вижу игроков: ${nearbyPlayers}. Здоровье ${Math.round(s.health)}, еда ${Math.round(s.food)}. Рядом: ${nearbyMobs}. Координаты ${s.self?.x} ${s.self?.y} ${s.self?.z}.`)
+  }
+
+  async autonomousTick() {
+    if (!this.bot.entity || this.busy) return
+    const now = Date.now()
+    const danger = this.world.danger()
+    if (danger) {
+      await this.defend()
+      return
+    }
+    if (now - this.lastAutonomousAction < 15000) return
+    this.lastAutonomousAction = now
+
+    if (this.bot.food <= 8) {
+      this.say('Еда заканчивается. Я заметил это и буду избегать лишнего риска.')
+      return
+    }
+
+    const nearby = this.world.nearbyEntities(8)
+    const player = nearby.find(e => e.type === 'player')
+    if (player) {
+      this.memory.rememberLocation(`player_${player.name}`, new Vec3(player.x, player.y, player.z), 'Последняя замеченная позиция игрока')
+    }
+  }
+
+  async onChat(username, message) {
+    if (!message || username === this.bot.username) return
+    this.memory.rememberPlayer(username)
+    this.memory.addHistory({ username, message: message.slice(0, 300) })
+
+    const addressed = /бот|bot_vanilla|эй|слушай/i.test(message)
+    if (!addressed && !this.busy) return
+
+    if (/останов|стой|отмен/i.test(message)) {
+      this.cancel('Остановился и отменил текущую задачу.')
+      return
+    }
+
+    if (/ко мне|иди сюда|за мной/i.test(message)) {
+      await this.goToPlayer(username)
+      return
+    }
+
+    const actions = await this.think(message, username)
+    await this.execute(actions, username)
+  }
+}
+
+function createBot() {
+  console.log(`🔌 Connecting Bot_Vanilla to ${CONFIG.host}:${CONFIG.port}`)
   const bot = mineflayer.createBot({
-    host: 'funvanillaworld.aternos.me', 
-    port: 57004, 
-    username: 'Bot_Vanilla',
-    version: '1.21.11'
+    host: CONFIG.host,
+    port: CONFIG.port,
+    username: CONFIG.username,
+    version: CONFIG.version
   })
 
   bot.loadPlugin(pathfinder)
+  const agent = new Agent(bot)
 
-  // Вспомогательная функция для проверки и атаки мобов
-  async function checkAndDefend() {
-    const target = bot.nearestEntity((entity) => {
-      return entity.type === 'mob' && 
-             entity.position.distanceTo(bot.entity.position) < 12 &&
-             ['zombie', 'skeleton', 'creeper', 'spider', 'drowned', 'husk'].includes(entity.name);
-    });
-
-    if (target) {
-      bot.pathfinder.setGoal(null); // Стопаем текущую цель пути
-      bot.chat(`⚔️ Обнаружил угрозу: ${target.name}! Защищаюсь!`);
-      
-      const sword = bot.inventory.items().find(item => item.name.includes('sword') || item.name.includes('axe'));
-      if (sword) await bot.equip(sword, 'hand');
-
-      while (target.valid && bot.entity.position.distanceTo(target.position) < 5) {
-        await bot.lookAt(target.position.offset(0, target.height / 2, 0));
-        bot.attack(target);
-        await new Promise(r => setTimeout(r, 600)); // Кулдаун ударов
-      }
-      return true; // Был бой
-    }
-    return false;
-  }
-
-  // Вспомогательная функция для автоматического крафта деревянных инструментов
-  async function craftNeededTool(toolType) {
-    const hasTool = bot.inventory.items().some(item => item.name.includes(toolType));
-    if (hasTool) return;
-
-    const logItem = bot.inventory.items().find(item => item.name.includes('log'));
-    if (!logItem) {
-      bot.chat(`⚠️ Мне нужна "${toolType}", но у меня нет дерева для крафта.`);
-      return;
-    }
-
-    try {
-      bot.chat(`🔨 Создаю инструмент: деревянный ${toolType}...`);
-      
-      // 1. Делаем доски
-      const plankRecipe = bot.recipesFor(mcData.itemsByName.oak_planks.id, null, 1, null);
-      if (plankRecipe) await bot.craft(plankRecipe, 1, null);
-      await new Promise(r => setTimeout(r, 500));
-
-      // 2. Делаем палки
-      const stickRecipe = bot.recipesFor(mcData.itemsByName.stick.id, null, 1, null);
-      if (stickRecipe) await bot.craft(stickRecipe, 1, null);
-      await new Promise(r => setTimeout(r, 500));
-
-      // 3. Делаем верстак
-      const craftingTableRecipe = bot.recipesFor(mcData.itemsByName.crafting_table.id, null, 1, null);
-      if (craftingTableRecipe) await bot.craft(craftingTableRecipe, 1, null);
-      await new Promise(r => setTimeout(r, 500));
-
-      // Находим место рядом для верстака и ставим его
-      const tableInInventory = bot.inventory.items().find(item => item.name === 'crafting_table');
-      if (!tableInInventory) return;
-
-      const referenceBlock = bot.blockAt(bot.entity.position.offset(0, -1, 0));
-      await bot.equip(tableInInventory, 'hand');
-      await bot.placeBlock(referenceBlock, require('vec3')(0, 1, 0));
-      await new Promise(r => setTimeout(r, 500));
-
-      const craftingTableBlock = bot.findBlock({ matching: mcData.blocksByName.crafting_table.id, maxDistance: 4 });
-      if (!craftingTableBlock) return;
-
-      // 4. Крафтим сам инструмент на верстаке
-      const targetItemId = mcData.itemsByName[`wooden_${toolType}`]?.id;
-      if (targetItemId) {
-        const toolRecipe = bot.recipesFor(targetItemId, null, 1, craftingTableBlock);
-        if (toolRecipe) await bot.craft(toolRecipe, 1, craftingTableBlock);
-      }
-
-      // 5. Ломаем верстак обратно
-      await bot.dig(craftingTableBlock);
-      bot.chat(`✅ Инструмент готов!`);
-    } catch (err) {
-      console.error('Ошибка крафта:', err.message);
-    }
-  }
-
-  bot.on('spawn', () => {
-    console.log('🧠 Сверхразумный Андроид-добытчик зашел на сервер!');
-    mcData = require('minecraft-data')(bot.version)
-    const defaultMovements = new Movements(bot, mcData)
-    defaultMovements.allowParkour = true 
-    defaultMovements.allowSprinting = false 
-    bot.pathfinder.setMovements(defaultMovements)
-
-    // РАДАР АВТО-ПРЫЖКОВ ПРИ ХОДЬБЕ
-    setInterval(() => {
-      if (bot.pathfinder.isMoving()) {
-        const yaw = bot.entity.yaw
-        const xDir = -Math.sin(yaw)
-        const zDir = -Math.cos(yaw)
-        const blockInFrontPos = bot.entity.position.offset(xDir * 0.6, 0, zDir * 0.6)
-        const blockInFront = bot.blockAt(blockInFrontPos)
-        
-        if (blockInFront && blockInFront.boundingBox !== 'empty') {
-          const blockAboveInFront = bot.blockAt(blockInFrontPos.offset(0, 1, 0))
-          if (!blockAboveInFront || blockAboveInFront.boundingBox === 'empty') {
-            bot.setControlState('jump', true)
-            setTimeout(() => { bot.setControlState('jump', false) }, 100)
-          }
-        }
-      }
-    }, 50);
-
-    // Фоновая защита от мобов, пока бот просто стоит
-    setInterval(async () => {
-      if (!bot.pathfinder.isMoving()) {
-        await checkAndDefend();
-      }
-    }, 1000);
+  bot.once('spawn', () => {
+    console.log('🧠 AI AGENT ONLINE')
+    const data = minecraftData(bot.version)
+    const movements = new Movements(bot, data)
+    movements.allowParkour = true
+    movements.allowSprinting = true
+    bot.pathfinder.setMovements(movements)
+    agent.say('Я в мире. Теперь я не просто выполняю команды: я наблюдаю, планирую, проверяю результат и запоминаю важное.')
   })
 
-  bot.on('chat', async (username, message) => {
-    if (username === bot.username) return 
+  bot.on('chat', (username, message) => agent.onChat(username, message).catch(error => console.error('[CHAT]', error.message)))
 
-    const lowerMessage = message.toLowerCase()
-    
-    if (lowerMessage.includes('бот')) {
-      const playerEntity = bot.players[username]?.entity
-      if (playerEntity) {
-        bot.lookAt(playerEntity.position.offset(0, playerEntity.height, 0))
-      }
-
-      bot.chat('⏳ [ИИ] Распознаю контекст твоей команды...')
-
-      const memory = loadMemory()
-      
-      const systemPrompt = `Ты — живой напарник по имени Bot_Vanilla в Майнкрафте 1.21.11.
-Твоя задача — понять, какой блок и в каком количестве хочет добыть игрок, перевести его в английское ID Майнкрафта и выдать JSON.
-
-Примеры понимания синонимов:
-- "накопай булыжника", "добудь камня", "мне нужен камень" -> "block_name": "stone" (или "cobblestone")
-- "собери дёрна", "мне нужна трава", "накопай блоков травы" -> "block_name": "grass_block"
-- "сруби дерево", "добудь древесины", "поруби дуб" -> "block_name": "log"
-- "найди цветов", "сорви цветочек" -> "block_name": "flower"
-
-Если игрок просит что-то добыть/сломать, обязательно заполни "block_name" (английское ID или часть слова) и "count" (число блоков).
-Если игрок просто общается, оставь "block_name": null, "count": 0.
-
-Ответь СТРОГО одной короткой строкой в JSON:
-{"block_name": "английское_ID_блока_или_null", "count": число_или_0, "text": "Твой душевный ответ игроку по-русски"}`;
-
-      try {
-        const result = await askOllama(`${systemPrompt}
-Игрок ${username} пишет: ${message}
-JSON:`)
-
-        if (result.text) bot.chat(result.text)
-
-        // 1. БАЗОВАЯ КОМАНДА НА ДВИЖЕНИЕ
-        if ((lowerMessage.includes('ко мне') || lowerMessage.includes('иди сюда') || lowerMessage.includes('за мной')) && playerEntity) {
-          const { GoalFollow } = goals
-          bot.pathfinder.setGoal(new GoalFollow(playerEntity, 1), true)
-        } 
-        
-        // 2. БАЗОВАЯ КОМАНМА НА СТОП
-        else if (lowerMessage.includes('стой') || lowerMessage.includes('остановись')) {
-          bot.pathfinder.setGoal(null)
-        } 
-        
-        // 3. БАЗОВАЯ КОМАНДА НА ПРЫЖОК
-        else if (lowerMessage.includes('прыгни')) {
-          bot.setControlState('jump', true)
-          setTimeout(() => { bot.setControlState('jump', false) }, 150);
-        }
-
-        // 4. ИНТЕЛЛЕКТУАЛЬНЫЙ СБОР БЛОКОВ
-        if (result.block_name && result.count > 0) {
-          const targetBlockId = result.block_name.toLowerCase();
-          const targetCount = result.count;
-
-          async function startMiningSession() {
-            let collectedCount = 0;
-            bot.chat(`Понял задачу! Начинаю сбор предмета, похожего на "${targetBlockId}" в количестве ${targetCount} шт. ⛏️`);
-
-            // Проверка и крафт инструментов перед началом копки
-            if (targetBlockId.includes('stone') || targetBlockId.includes('cobble') || targetBlockId.includes('ore')) {
-              await craftNeededTool('pickaxe');
-            } else if (targetBlockId.includes('log') || targetBlockId.includes('wood')) {
-              await craftNeededTool('axe');
-            }
-
-            while (collectedCount < targetCount) {
-              // Самооборона во время сессии копки
-              const fought = await checkAndDefend();
-              if (fought) await new Promise(r => setTimeout(r, 1000));
-
-              const targetBlock = bot.findBlock({
-                matching: (block) => block.name.includes(targetBlockId) || 
-                                    (targetBlockId === 'stone' && block.name.includes('cobblestone')) ||
-                                    (targetBlockId === 'flower' && (block.name.includes('dandelion') || block.name.includes('poppy') || block.name.includes('rose'))),
-                maxDistance: 32
-              })
-
-              if (!targetBlock) {
-                bot.chat(`Больше блоков "${targetBlockId}" в радиусе 32 метров нет! Собрано: ${collectedCount}.`);
-                break;
-              }
-
-              bot.pathfinder.setGoal(new goals.GoalBlock(targetBlock.position.x, targetBlock.position.y, targetBlock.position.z))
-              
-              await new Promise((resolve) => {
-                const checkArrival = setInterval(async () => {
-                  const distance = bot.entity.position.distanceTo(targetBlock.position)
-                  if (distance <= 4.2) {
-                    clearInterval(checkArrival);
-                    bot.pathfinder.setGoal(null);
-                    resolve();
-                  }
-                }, 300);
-                setTimeout(() => { clearInterval(checkArrival); resolve(); }, 20000);
-              });
-
-              try {
-                await bot.lookAt(targetBlock.position)
-
-                // Экипировка лучшего инструмента
-                const bestTool = bot.inventory.items().find(item => {
-                  if ((targetBlock.name.includes('log') || targetBlock.name.includes('wood')) && item.name.includes('axe')) return true;
-                  if ((targetBlock.name.includes('stone') || targetBlock.name.includes('cobble') || targetBlock.name.includes('ore')) && item.name.includes('pickaxe')) return true;
-                  if ((targetBlock.name.includes('dirt') || targetBlock.name.includes('grass')) && item.name.includes('shovel')) return true;
-                  return false;
-                });
-
-                if (bestTool) await bot.equip(bestTool, 'hand');
-
-                await new Promise(r => setTimeout(r, 150)); 
-                await bot.dig(targetBlock) 
-                
-                collectedCount++;
-                await new Promise(r => setTimeout(r, 1500)); 
-              } catch (err) {
-                console.log("Пропуск блока...");
-                await new Promise(r => setTimeout(r, 500));
-              }
-            }
-
-            // Доставка игроку под ноги
-            if (collectedCount > 0 && playerEntity) {
-              bot.chat(`Сбор окончен! Несу добычу к тебе...🏃‍♂️`);
-              bot.pathfinder.setGoal(new goals.GoalFollow(playerEntity, 1), true)
-              
-              while (bot.entity.position.distanceTo(playerEntity.position) > 2) {
-                await checkAndDefend(); // Защищаемся по пути к игроку
-                await new Promise(r => setTimeout(r, 300));
-              }
-              
-              bot.pathfinder.setGoal(null)
-              
-              const items = bot.inventory.items()
-              for (const item of items) {
-                // Оставляем инструменты и важные материалы для крафта при себе
-                if (item.name.includes('pickaxe') || item.name.includes('axe') || 
-                    item.name.includes('shovel') || item.name.includes('sword') || 
-                    item.name.includes('stick') || item.name === 'crafting_table') {
-                  continue;
-                }
-                try {
-                  await bot.tossStack(item)
-                  await new Promise(r => setTimeout(r, 200)); 
-                } catch (tossErr) {
-                  console.error('Ошибка выброса:', tossErr.message)
-                }
-              }
-              bot.chat('Вот твои ресурсы, держи!');
-            }
-          }
-
-          startMiningSession();
-        }
-
-      } catch (error) {
-        console.error('Ошибка ИИ:', error.message)
-      }
-    }
+  bot.on('health', () => {
+    if (bot.health <= 6) agent.say('Мне опасно: здоровье сильно упало. Сначала займусь выживанием.')
   })
 
-  bot.on('end', (reason) => {
-    console.log(`❌ Отключение: ${reason}. Рестарт через 15 сек...`);
-    setTimeout(() => createBotInstance(), 15000);
-  });
-  
-  bot.on('error', (err) => console.error('Ошибка сети:', err.message));
+  bot.on('death', () => {
+    agent.busy = false
+    agent.task = null
+    agent.taskId++
+    console.log('[AGENT] Died; resetting task state')
+  })
+
+  bot.on('kicked', reason => console.log('[KICKED]', reason))
+  bot.on('error', error => console.error('[BOT ERROR]', error.message))
+  bot.on('end', () => {
+    console.log('🔌 Disconnected. Reconnecting in 8 seconds...')
+    setTimeout(createBot, 8000)
+  })
+
+  setInterval(() => agent.autonomousTick().catch(error => console.error('[TICK]', error.message)), 5000)
+  return bot
 }
 
-createBotInstance();
+createBot()
