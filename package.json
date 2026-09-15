@@ -1,0 +1,19 @@
+{
+  "name": "bot-vanilla-ai-agent",
+  "version": "2.0.0",
+  "private": true,
+  "description": "Autonomous Minecraft AI agent powered by Mineflayer and Ollama",
+  "main": "bot",
+  "scripts": {
+    "start": "node bot"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "mineflayer": "latest",
+    "mineflayer-pathfinder": "latest",
+    "minecraft-data": "latest",
+    "vec3": "latest"
+  }
+}
