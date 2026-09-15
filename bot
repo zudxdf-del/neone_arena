@@ -1,0 +1,332 @@
+const mineflayer = require('mineflayer')
+const { pathfinder, Movements, goals } = require('mineflayer-pathfinder')
+const fs = require('fs')
+
+let mcData;
+const MEMORY_FILE = './memory.json'
+
+function loadMemory() {
+  try {
+    if (fs.existsSync(MEMORY_FILE)) return JSON.parse(fs.readFileSync(MEMORY_FILE, 'utf8'))
+  } catch (e) { console.error(e) }
+  return { players: {}, locations: {}, facts: [] }
+}
+
+async function askOllama(promptText) {
+  const response = await fetch('http://127.0.0.1:11434/api/generate', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model: 'llama3', prompt: promptText, stream: false })
+  })
+  const data = await response.json()
+  if (!data || !data.response) throw new Error('Пустой ответ Олламы')
+  
+  let rawJson = data.response.trim()
+  const start = rawJson.indexOf('{')
+  const end = rawJson.lastIndexOf('}')
+  if (start !== -1 && end !== -1) rawJson = rawJson.substring(start, end + 1)
+  return JSON.parse(rawJson)
+}
+
+function createBotInstance() {
+  console.log('🔌 Подключение к серверу Aternos...');
+  
+  const bot = mineflayer.createBot({
+    host: 'funvanillaworld.aternos.me', 
+    port: 57004, 
+    username: 'Bot_Vanilla',
+    version: '1.21.11'
+  })
+
+  bot.loadPlugin(pathfinder)
+
+  // Вспомогательная функция для проверки и атаки мобов
+  async function checkAndDefend() {
+    const target = bot.nearestEntity((entity) => {
+      return entity.type === 'mob' && 
+             entity.position.distanceTo(bot.entity.position) < 12 &&
+             ['zombie', 'skeleton', 'creeper', 'spider', 'drowned', 'husk'].includes(entity.name);
+    });
+
+    if (target) {
+      bot.pathfinder.setGoal(null); // Стопаем текущую цель пути
+      bot.chat(`⚔️ Обнаружил угрозу: ${target.name}! Защищаюсь!`);
+      
+      const sword = bot.inventory.items().find(item => item.name.includes('sword') || item.name.includes('axe'));
+      if (sword) await bot.equip(sword, 'hand');
+
+      while (target.valid && bot.entity.position.distanceTo(target.position) < 5) {
+        await bot.lookAt(target.position.offset(0, target.height / 2, 0));
+        bot.attack(target);
+        await new Promise(r => setTimeout(r, 600)); // Кулдаун ударов
+      }
+      return true; // Был бой
+    }
+    return false;
+  }
+
+  // Вспомогательная функция для автоматического крафта деревянных инструментов
+  async function craftNeededTool(toolType) {
+    const hasTool = bot.inventory.items().some(item => item.name.includes(toolType));
+    if (hasTool) return;
+
+    const logItem = bot.inventory.items().find(item => item.name.includes('log'));
+    if (!logItem) {
+      bot.chat(`⚠️ Мне нужна "${toolType}", но у меня нет дерева для крафта.`);
+      return;
+    }
+
+    try {
+      bot.chat(`🔨 Создаю инструмент: деревянный ${toolType}...`);
+      
+      // 1. Делаем доски
+      const plankRecipe = bot.recipesFor(mcData.itemsByName.oak_planks.id, null, 1, null);
+      if (plankRecipe) await bot.craft(plankRecipe, 1, null);
+      await new Promise(r => setTimeout(r, 500));
+
+      // 2. Делаем палки
+      const stickRecipe = bot.recipesFor(mcData.itemsByName.stick.id, null, 1, null);
+      if (stickRecipe) await bot.craft(stickRecipe, 1, null);
+      await new Promise(r => setTimeout(r, 500));
+
+      // 3. Делаем верстак
+      const craftingTableRecipe = bot.recipesFor(mcData.itemsByName.crafting_table.id, null, 1, null);
+      if (craftingTableRecipe) await bot.craft(craftingTableRecipe, 1, null);
+      await new Promise(r => setTimeout(r, 500));
+
+      // Находим место рядом для верстака и ставим его
+      const tableInInventory = bot.inventory.items().find(item => item.name === 'crafting_table');
+      if (!tableInInventory) return;
+
+      const referenceBlock = bot.blockAt(bot.entity.position.offset(0, -1, 0));
+      await bot.equip(tableInInventory, 'hand');
+      await bot.placeBlock(referenceBlock, require('vec3')(0, 1, 0));
+      await new Promise(r => setTimeout(r, 500));
+
+      const craftingTableBlock = bot.findBlock({ matching: mcData.blocksByName.crafting_table.id, maxDistance: 4 });
+      if (!craftingTableBlock) return;
+
+      // 4. Крафтим сам инструмент на верстаке
+      const targetItemId = mcData.itemsByName[`wooden_${toolType}`]?.id;
+      if (targetItemId) {
+        const toolRecipe = bot.recipesFor(targetItemId, null, 1, craftingTableBlock);
+        if (toolRecipe) await bot.craft(toolRecipe, 1, craftingTableBlock);
+      }
+
+      // 5. Ломаем верстак обратно
+      await bot.dig(craftingTableBlock);
+      bot.chat(`✅ Инструмент готов!`);
+    } catch (err) {
+      console.error('Ошибка крафта:', err.message);
+    }
+  }
+
+  bot.on('spawn', () => {
+    console.log('🧠 Сверхразумный Андроид-добытчик зашел на сервер!');
+    mcData = require('minecraft-data')(bot.version)
+    const defaultMovements = new Movements(bot, mcData)
+    defaultMovements.allowParkour = true 
+    defaultMovements.allowSprinting = false 
+    bot.pathfinder.setMovements(defaultMovements)
+
+    // РАДАР АВТО-ПРЫЖКОВ ПРИ ХОДЬБЕ
+    setInterval(() => {
+      if (bot.pathfinder.isMoving()) {
+        const yaw = bot.entity.yaw
+        const xDir = -Math.sin(yaw)
+        const zDir = -Math.cos(yaw)
+        const blockInFrontPos = bot.entity.position.offset(xDir * 0.6, 0, zDir * 0.6)
+        const blockInFront = bot.blockAt(blockInFrontPos)
+        
+        if (blockInFront && blockInFront.boundingBox !== 'empty') {
+          const blockAboveInFront = bot.blockAt(blockInFrontPos.offset(0, 1, 0))
+          if (!blockAboveInFront || blockAboveInFront.boundingBox === 'empty') {
+            bot.setControlState('jump', true)
+            setTimeout(() => { bot.setControlState('jump', false) }, 100)
+          }
+        }
+      }
+    }, 50);
+
+    // Фоновая защита от мобов, пока бот просто стоит
+    setInterval(async () => {
+      if (!bot.pathfinder.isMoving()) {
+        await checkAndDefend();
+      }
+    }, 1000);
+  })
+
+  bot.on('chat', async (username, message) => {
+    if (username === bot.username) return 
+
+    const lowerMessage = message.toLowerCase()
+    
+    if (lowerMessage.includes('бот')) {
+      const playerEntity = bot.players[username]?.entity
+      if (playerEntity) {
+        bot.lookAt(playerEntity.position.offset(0, playerEntity.height, 0))
+      }
+
+      bot.chat('⏳ [ИИ] Распознаю контекст твоей команды...')
+
+      const memory = loadMemory()
+      
+      const systemPrompt = `Ты — живой напарник по имени Bot_Vanilla в Майнкрафте 1.21.11.
+Твоя задача — понять, какой блок и в каком количестве хочет добыть игрок, перевести его в английское ID Майнкрафта и выдать JSON.
+
+Примеры понимания синонимов:
+- "накопай булыжника", "добудь камня", "мне нужен камень" -> "block_name": "stone" (или "cobblestone")
+- "собери дёрна", "мне нужна трава", "накопай блоков травы" -> "block_name": "grass_block"
+- "сруби дерево", "добудь древесины", "поруби дуб" -> "block_name": "log"
+- "найди цветов", "сорви цветочек" -> "block_name": "flower"
+
+Если игрок просит что-то добыть/сломать, обязательно заполни "block_name" (английское ID или часть слова) и "count" (число блоков).
+Если игрок просто общается, оставь "block_name": null, "count": 0.
+
+Ответь СТРОГО одной короткой строкой в JSON:
+{"block_name": "английское_ID_блока_или_null", "count": число_или_0, "text": "Твой душевный ответ игроку по-русски"}`;
+
+      try {
+        const result = await askOllama(`${systemPrompt}
+Игрок ${username} пишет: ${message}
+JSON:`)
+
+        if (result.text) bot.chat(result.text)
+
+        // 1. БАЗОВАЯ КОМАНДА НА ДВИЖЕНИЕ
+        if ((lowerMessage.includes('ко мне') || lowerMessage.includes('иди сюда') || lowerMessage.includes('за мной')) && playerEntity) {
+          const { GoalFollow } = goals
+          bot.pathfinder.setGoal(new GoalFollow(playerEntity, 1), true)
+        } 
+        
+        // 2. БАЗОВАЯ КОМАНМА НА СТОП
+        else if (lowerMessage.includes('стой') || lowerMessage.includes('остановись')) {
+          bot.pathfinder.setGoal(null)
+        } 
+        
+        // 3. БАЗОВАЯ КОМАНДА НА ПРЫЖОК
+        else if (lowerMessage.includes('прыгни')) {
+          bot.setControlState('jump', true)
+          setTimeout(() => { bot.setControlState('jump', false) }, 150);
+        }
+
+        // 4. ИНТЕЛЛЕКТУАЛЬНЫЙ СБОР БЛОКОВ
+        if (result.block_name && result.count > 0) {
+          const targetBlockId = result.block_name.toLowerCase();
+          const targetCount = result.count;
+
+          async function startMiningSession() {
+            let collectedCount = 0;
+            bot.chat(`Понял задачу! Начинаю сбор предмета, похожего на "${targetBlockId}" в количестве ${targetCount} шт. ⛏️`);
+
+            // Проверка и крафт инструментов перед началом копки
+            if (targetBlockId.includes('stone') || targetBlockId.includes('cobble') || targetBlockId.includes('ore')) {
+              await craftNeededTool('pickaxe');
+            } else if (targetBlockId.includes('log') || targetBlockId.includes('wood')) {
+              await craftNeededTool('axe');
+            }
+
+            while (collectedCount < targetCount) {
+              // Самооборона во время сессии копки
+              const fought = await checkAndDefend();
+              if (fought) await new Promise(r => setTimeout(r, 1000));
+
+              const targetBlock = bot.findBlock({
+                matching: (block) => block.name.includes(targetBlockId) || 
+                                    (targetBlockId === 'stone' && block.name.includes('cobblestone')) ||
+                                    (targetBlockId === 'flower' && (block.name.includes('dandelion') || block.name.includes('poppy') || block.name.includes('rose'))),
+                maxDistance: 32
+              })
+
+              if (!targetBlock) {
+                bot.chat(`Больше блоков "${targetBlockId}" в радиусе 32 метров нет! Собрано: ${collectedCount}.`);
+                break;
+              }
+
+              bot.pathfinder.setGoal(new goals.GoalBlock(targetBlock.position.x, targetBlock.position.y, targetBlock.position.z))
+              
+              await new Promise((resolve) => {
+                const checkArrival = setInterval(async () => {
+                  const distance = bot.entity.position.distanceTo(targetBlock.position)
+                  if (distance <= 4.2) {
+                    clearInterval(checkArrival);
+                    bot.pathfinder.setGoal(null);
+                    resolve();
+                  }
+                }, 300);
+                setTimeout(() => { clearInterval(checkArrival); resolve(); }, 20000);
+              });
+
+              try {
+                await bot.lookAt(targetBlock.position)
+
+                // Экипировка лучшего инструмента
+                const bestTool = bot.inventory.items().find(item => {
+                  if ((targetBlock.name.includes('log') || targetBlock.name.includes('wood')) && item.name.includes('axe')) return true;
+                  if ((targetBlock.name.includes('stone') || targetBlock.name.includes('cobble') || targetBlock.name.includes('ore')) && item.name.includes('pickaxe')) return true;
+                  if ((targetBlock.name.includes('dirt') || targetBlock.name.includes('grass')) && item.name.includes('shovel')) return true;
+                  return false;
+                });
+
+                if (bestTool) await bot.equip(bestTool, 'hand');
+
+                await new Promise(r => setTimeout(r, 150)); 
+                await bot.dig(targetBlock) 
+                
+                collectedCount++;
+                await new Promise(r => setTimeout(r, 1500)); 
+              } catch (err) {
+                console.log("Пропуск блока...");
+                await new Promise(r => setTimeout(r, 500));
+              }
+            }
+
+            // Доставка игроку под ноги
+            if (collectedCount > 0 && playerEntity) {
+              bot.chat(`Сбор окончен! Несу добычу к тебе...🏃‍♂️`);
+              bot.pathfinder.setGoal(new goals.GoalFollow(playerEntity, 1), true)
+              
+              while (bot.entity.position.distanceTo(playerEntity.position) > 2) {
+                await checkAndDefend(); // Защищаемся по пути к игроку
+                await new Promise(r => setTimeout(r, 300));
+              }
+              
+              bot.pathfinder.setGoal(null)
+              
+              const items = bot.inventory.items()
+              for (const item of items) {
+                // Оставляем инструменты и важные материалы для крафта при себе
+                if (item.name.includes('pickaxe') || item.name.includes('axe') || 
+                    item.name.includes('shovel') || item.name.includes('sword') || 
+                    item.name.includes('stick') || item.name === 'crafting_table') {
+                  continue;
+                }
+                try {
+                  await bot.tossStack(item)
+                  await new Promise(r => setTimeout(r, 200)); 
+                } catch (tossErr) {
+                  console.error('Ошибка выброса:', tossErr.message)
+                }
+              }
+              bot.chat('Вот твои ресурсы, держи!');
+            }
+          }
+
+          startMiningSession();
+        }
+
+      } catch (error) {
+        console.error('Ошибка ИИ:', error.message)
+      }
+    }
+  })
+
+  bot.on('end', (reason) => {
+    console.log(`❌ Отключение: ${reason}. Рестарт через 15 сек...`);
+    setTimeout(() => createBotInstance(), 15000);
+  });
+  
+  bot.on('error', (err) => console.error('Ошибка сети:', err.message));
+}
+
+createBotInstance();
