@@ -1,11 +1,11 @@
 {
   "name": "bot-vanilla-ai-agent",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "private": true,
-  "description": "Autonomous Minecraft AI agent powered by Mineflayer and Ollama",
-  "main": "bot",
+  "description": "Responsive Minecraft AI agent powered by Mineflayer and Ollama",
+  "main": "bot.js",
   "scripts": {
-    "start": "node bot"
+    "start": "node bot.js"
   },
   "engines": {
     "node": ">=18"
