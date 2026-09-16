@@ -19,10 +19,18 @@ const ORE = { coal_ore:['coal_ore','deepslate_coal_ore'], iron_ore:['iron_ore','
 
 class Agent {
   constructor(bot) { this.bot=bot; this.task=0; this.busy=false; this.memory=this.loadMemory() }
-  loadMemory(){try{return JSON.parse(fs.readFileSync(CFG.memory,'utf8'))}catch(_){return{players:{},locations:{},history:[]}}}
+  loadMemory(){
+    let m={players:{},locations:{},history:[]}
+    try { m=JSON.parse(fs.readFileSync(CFG.memory,'utf8')) || m } catch(_) {}
+    if(!m || typeof m!=='object')m={}
+    if(!m.players || typeof m.players!=='object')m.players={}
+    if(!m.locations || typeof m.locations!=='object')m.locations={}
+    if(!Array.isArray(m.history))m.history=[]
+    return m
+  }
   saveMemory(){try{fs.writeFileSync(CFG.memory,JSON.stringify(this.memory,null,2))}catch(_){}
   }
-  remember(user,message){this.memory.players[user]={...(this.memory.players[user]||{}),lastMessage:message,lastSeen:Date.now()};this.memory.history.push({user,message,at:Date.now()});this.memory.history=this.memory.history.slice(-80);this.saveMemory()}
+  remember(user,message){this.memory.players[user]={...(this.memory.players[user]||{}),lastMessage:message,lastSeen:Date.now()};if(!Array.isArray(this.memory.history))this.memory.history=[];this.memory.history.push({user,message,at:Date.now()});this.memory.history=this.memory.history.slice(-80);this.saveMemory()}
   say(text){text=String(text||'').replace(/\s+/g,' ').trim().slice(0,240);if(text)this.bot.chat(text)}
   stop(text='Остановился.'){this.task++;this.busy=false;this.bot.pathfinder.setGoal(null);this.bot.clearControlStates();this.say(text)}
   world(){const p=this.bot.entity?.position;return{position:p?{x:Math.round(p.x),y:Math.round(p.y),z:Math.round(p.z)}:null,health:this.bot.health,food:this.bot.food,dimension:this.bot.game?.dimension,players:Object.values(this.bot.players).filter(x=>x.username).map(x=>({name:x.username,visible:!!x.entity})),entities:Object.values(this.bot.entities).filter(e=>e?.position).slice(0,30).map(e=>({name:e.username||e.name||e.type,type:e.type,distance:p?Number(e.position.distanceTo(p).toFixed(1)):0}))}}
